@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 0.3
+.VERSION 0.3.1
 
 .GUID bbda77a3-7d1c-415e-9c28-7c934971599c
 
@@ -35,7 +35,7 @@
  This script, created by Daniel Bradley at ourcloudnetwork.co.uk, generates a report on the authentication methods registered by users in your Microsoft 365 tenant. The report includes information on the number of users, the percentage of users with strong authentication methods, the percentage of users who are passwordless capable, and more. The script uses the Microsoft Graph API to retrieve the necessary data and the report is built with HTML, CSS and JS.
 
 .PARAMETER outpath
- Specify the output path of the report file.
+ Specified the output path of the report file.
 
 .EXAMPLE
 PS> Invoke-EntraAuthReport -outpath "C:\Reports\EntraAuthReport.html"
@@ -65,20 +65,20 @@ if ($state) {
     }
     if ($missingPerms.Count -eq 0) {
         $hasAllPerms = $true
-        Write-output "Connected to Microsoft Graph with all required permissions" -ForegroundColor Green
+        Write-output "Connected to Microsoft Graph with all required permissions"
     } else {
-        Write-output "Missing required permissions: $($missingPerms -join ', ')" -ForegroundColor Yellow
-        Write-output "Reconnecting with all required permissions..." -ForegroundColor Yellow
+        Write-output "Missing required permissions: $($missingPerms -join ', ')"
+        Write-output "Reconnecting with all required permissions..."
     }
 } else {
-    Write-output "Not connected to Microsoft Graph. Connecting now..." -ForegroundColor Yellow
+    Write-output "Not connected to Microsoft Graph. Connecting now..."
 }
 
 # Connect if we need to
 if (-not $hasAllPerms) {
     try {
         Connect-MgGraph -Scopes $requiredPerms -ErrorAction Stop -NoWelcome
-        Write-output "Successfully connected to Microsoft Graph" -ForegroundColor Green
+        Write-output "Successfully connected to Microsoft Graph"
     } catch {
         Write-Error "Failed to connect to Microsoft Graph: $_"
         exit
@@ -1476,7 +1476,7 @@ Function Generate-EntraAuthReport {
 
     # Output HTML report
     $html | Out-File -FilePath $OutputPath -Encoding UTF8
-    Write-output "HTML report generated at $OutputPath" -ForegroundColor Green
+    Write-output "HTML report generated at $OutputPath"
     
     # Open the report in the default browser
     Start-Process $OutputPath
