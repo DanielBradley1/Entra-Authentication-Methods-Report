@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 0.2
+.VERSION 0.3
 
 .GUID bbda77a3-7d1c-415e-9c28-7c934971599c
 
@@ -27,6 +27,7 @@
 .RELEASENOTES
     v0.1 - Initial release
     v0.2 - Fix output path issues
+    v0.3 - Added export functionality, examples and increased registration details report size to 20,000.
 #>
 
 <#
@@ -34,7 +35,7 @@
  This script, created by Daniel Bradley at ourcloudnetwork.co.uk, generates a report on the authentication methods registered by users in your Microsoft 365 tenant. The report includes information on the number of users, the percentage of users with strong authentication methods, the percentage of users who are passwordless capable, and more. The script uses the Microsoft Graph API to retrieve the necessary data and the report is built with HTML, CSS and JS.
 
 .PARAMETER outpath
- Specified the output path of the report file.
+ Specify the output path of the report file.
 
 .EXAMPLE
 PS> Invoke-EntraAuthReport -outpath "C:\Reports\EntraAuthReport.html"
@@ -119,11 +120,11 @@ Function Get-AuthenticationMethods {
 
 Function Get-UserRegistrationDetails {
     #Lists all users and their user mfa registration details including their default method
-    $userRegistrations = Invoke-MgGraphRequest -Uri "Beta/reports/authenticationMethods/userRegistrationDetails?`$orderby=userPrincipalName" -OutputType PSObject | Select -Expand Value
+    $userRegistrations = Invoke-MgGraphRequest -Uri "Beta/reports/authenticationMethods/userRegistrationDetails?`$top=20000&`$orderby=userPrincipalName" -OutputType PSObject | Select -Expand Value
     $usersWithMobileMethods = $userRegistrations | where {$_.methodsRegistered -contains "mobilePhone"} | Select userPrincipalName, methodsRegistered
     $userRegistrationsMethods = [System.Collections.Generic.List[Object]]::new()
     Foreach ($user in $usersWithMobileMethods){
-        $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.userPrincipalName)/authentication/methods" -OutputType PSObject | Select -Expand Value | WHere {$_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod'}
+        $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.userPrincipalName)/authentication/methods" -OutputType PSObject | WHere {$_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod'}
         if ($Methods.smsSignInState -eq "ready") {$phoneinfo = @("Voice Call","SMS")}else{$phoneinfo = @("Voice Call")}
         $methodsFromReport = ($userRegistrations | where {$_.userPrincipalName -eq $user.userPrincipalName}).methodsRegistered
         $methodsToReplace = @()
@@ -776,7 +777,56 @@ Function Generate-EntraAuthReport {
         body.modal-open {
             overflow: hidden; /* Prevent scrolling of background when modal is open */
         }
+
+        /* Style for export button - similar to expand icon */
+        .export-csv-button {
+            padding: 8px 15px;
+            background-color: #eee;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-left: auto; /* Push to right side of filter container */
+            margin-right: 10px; /* Add space between export and expand buttons */
+        }
+        
+        .export-csv-button:hover {
+            background-color: #ddd;
+        }
+        
+        .export-csv-button svg {
+            width: 16px;
+            height: 16px;
+            margin-right: 5px;
+        }
+        
+        /* Additional styles for the expand icon to work with the new button */
+        .expand-icon {
+            /* Existing styles */
+            margin-left: 0; /* Remove auto margin since we're using flexbox spacing */
+        }
+
+        /* Add space to separate buttons from filter buttons */
+        .button-group {
+            margin-left: auto;
+            display: flex;
+        }
+        
+        /* Update filter container to use flexbox properly */
+        .filter-container {
+            display: flex;
+            margin-bottom: 20px;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
     </style>
+    <!-- Add FileSaver.js for better file saving experience -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 </head>
 <body>
     <div class="header-container">
@@ -905,12 +955,22 @@ Function Generate-EntraAuthReport {
             <button class="filter-button" onclick="filterTable('strong')">Strong Methods</button>
             <button class="filter-button" onclick="filterTable('mixed')">Strong+Weak Methods</button>
             <button class="filter-button" onclick="filterTable('weak')">Weak Methods Only</button>
-            <button class="expand-icon" onclick="openFullscreenTable()" title="Expand table to full screen">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
-                </svg>
-                Expand
-            </button>
+            <div class="button-group">
+                <button class="export-csv-button" onclick="exportTableToCSV()" title="Export table to CSV file">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Export CSV
+                </button>
+                <button class="expand-icon" onclick="openFullscreenTable()" title="Expand table to full screen">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                    </svg>
+                    Expand
+                </button>
+            </div>
         </div>
 
         <div class="table-container">
@@ -1336,12 +1396,82 @@ Function Generate-EntraAuthReport {
                 closeFullscreenTable();
             }
         });
+
+        // Function to export table data to CSV
+        function exportTableToCSV() {
+            // Create a simple CSV string with proper formatting
+            let csvContent = [];
+            
+            // Get the table and header cells
+            const table = document.getElementById('authMethodsTable');
+            const headerRow = table.querySelector('thead tr');
+            const headerCells = headerRow.querySelectorAll('th');
+            
+            // Create header row for CSV
+            let headerCsvRow = [];
+            for (let i = 0; i < headerCells.length; i++) {
+                if (headerCells[i].style.display !== 'none') {
+                    let cellText = headerCells[i].textContent.trim();
+                    // Escape double quotes with double quotes for CSV format
+                    cellText = cellText.replace(/"/g, '""');
+                    headerCsvRow.push('"' + cellText + '"');
+                }
+            }
+            csvContent.push(headerCsvRow.join(','));
+            
+            // Get all visible rows and process them
+            const dataRows = table.querySelectorAll('tbody tr');
+            for (let i = 0; i < dataRows.length; i++) {
+                if (dataRows[i].style.display === 'none') continue;
+                
+                let csvRow = [];
+                const cells = dataRows[i].querySelectorAll('td');
+                
+                for (let j = 0; j < cells.length; j++) {
+                    if (cells[j].style.display === 'none') continue;
+                    
+                    let cellText = cells[j].textContent.trim();
+                    // Convert checkmarks and x-marks to Yes/No
+                    if (cellText === '✓') cellText = 'Yes';
+                    if (cellText === '✗') cellText = 'No';
+                    
+                    // Escape double quotes with double quotes for CSV format
+                    cellText = cellText.replace(/"/g, '""');
+                    csvRow.push('"' + cellText + '"');
+                }
+                
+                csvContent.push(csvRow.join(','));
+            }
+            
+            // Join all rows with proper newlines
+            const csvString = csvContent.join('\r\n');
+            
+            // Get date for filename
+            const today = new Date();
+            const date = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+            
+            // Create download link with data URI
+            const downloadLink = document.createElement('a');
+            
+            // Add BOM for proper UTF-8 encoding in Excel
+            const BOM = '\uFEFF';
+            const encodedUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(BOM + csvString);
+            
+            downloadLink.setAttribute('href', encodedUri);
+            downloadLink.setAttribute('download', 'Entra_Auth_Methods_Report_' + date + '.csv');
+            document.body.appendChild(downloadLink);
+            
+            // Trigger download and remove link
+            downloadLink.click();
+            document.body.removeChild(downloadLink);
+        }
+        
     </script>
 </body>
 </html>
 "@
 
-    # Geneterate the path
+    # Generate the path
     $OutputPath = "$outpath\Entra_Authentication_Methods_Report.html"
 
     # Output HTML report
