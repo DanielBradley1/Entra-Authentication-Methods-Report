@@ -321,7 +321,9 @@ Function Generate-EntraAuthReport {
     )
     
     # Create HTML header
-    $html = @"
+    $html = [System.Text.StringBuilder]::new()
+
+    [void]$html.AppendLine(@"
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1018,7 +1020,7 @@ Function Generate-EntraAuthReport {
                         <th style="width: 7%;">Default Method</th>
                         <th style="width: 5%;">MFA</th>
                         <th style="width: 5%;">Pless</th>
-"@
+"@)
 
     # Add column for each method type
     foreach ($method in $MethodTypes) {
@@ -1028,18 +1030,18 @@ Function Generate-EntraAuthReport {
         $isDisabled = $MethodsDisabledByPolicy.Name -contains $method.Name
         
         if ($isDisabled) {
-            $html += "                    <th class=`"$cssClass diagonal-header`" data-disabled=`"true`"><div>$($method.Name)</div></th>`n"
+            [void]$html.AppendLine("                    <th class=`"$cssClass diagonal-header`" data-disabled=`"true`"><div>$($method.Name)</div></th>`n")
         }
         else {
-            $html += "                    <th class=`"$cssClass diagonal-header`" ><div>$($method.Name)</div></th>`n"
+            [void]$html.AppendLine("                    <th class=`"$cssClass diagonal-header`" ><div>$($method.Name)</div></th>`n")
         }
     }
 
-    $html += @"
+    [void]$html.AppendLine(@"
                 </tr>
             </thead>
             <tbody>
-"@
+"@)
 
     # Add a row for each user
     foreach ($user in $UserRegistrations) {
@@ -1080,22 +1082,22 @@ Function Generate-EntraAuthReport {
         if ($isPrivileged) { $dataAttributes += "data-privileged='true' " }
         if ($isSyncUser) { $dataAttributes += "data-syncuser='true' " }
         
-        $html += "                <tr $dataAttributes>`n"
-        $html += "                    <td>$($user.userPrincipalName)</td>`n"
-        $html += "                    <td>$($user.defaultmfaMethod)</td>`n"
-        $html += "                    <td>$(if($user.isMfaCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n"
-        $html += "                    <td>$(if($user.isPasswordlessCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n"
+        [void]$html.AppendLine("                <tr $dataAttributes>`n")
+        [void]$html.AppendLine("                    <td>$($user.userPrincipalName)</td>`n")
+        [void]$html.AppendLine("                    <td>$($user.defaultmfaMethod)</td>`n")
+        [void]$html.AppendLine("                    <td>$(if($user.isMfaCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n")
+        [void]$html.AppendLine("                    <td>$(if($user.isPasswordlessCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n")
         
         # Add column for each method type - check if registered
         foreach ($method in $MethodTypes) {
             $isRegistered = $userMethods -contains $method.type
-            $html += "                    <td>$(if($isRegistered) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n"
+            [void]$html.AppendLine("                    <td>$(if($isRegistered) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n")
         }
         
-        $html += "                </tr>`n"
+        [void]$html.AppendLine("                </tr>`n")
     }
 
-    $html += @"
+    [void]$html.AppendLine(@"
             </tbody>
         </table>
     </div>
@@ -1507,13 +1509,13 @@ Function Generate-EntraAuthReport {
     </script>
 </body>
 </html>
-"@
+"@)
 
     # Generate the path
     $OutputPath = Join-Path -Path $outpath -ChildPath "Entra_Authentication_Methods_Report.html"
 
     # Output HTML report
-    $html | Out-File -FilePath $OutputPath -Encoding UTF8
+    $html.ToString() | Out-File -FilePath $OutputPath -Encoding UTF8
     Write-output "HTML report generated at $OutputPath"
     
     # Open the report in the default browser
