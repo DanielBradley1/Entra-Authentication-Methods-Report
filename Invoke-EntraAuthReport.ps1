@@ -210,8 +210,10 @@ $weakMethodTypes = $AllMethods | Where-Object { $_.Strength -eq 'Weak' }
 
 ###Get authentication methods info
 #Get user registration details
+Write-output "Fetching users registration details..."
 $userRegistrationsReport = Get-UserRegistrationDetails
 #Get authentication methods
+Write-output "Fetching authentication methods..."
 $authenticationMethods = Get-AuthenticationMethods
 #Get disabled and enabled authentication methods
 $disabledAuthenticationMethods = $authenticationMethods | where { $_.State -eq "Disabled" }
@@ -227,6 +229,7 @@ $enabledWeakAuthenticationMethods = $MethodsEnabledByPolicy | where { $_.Strengt
 $totalUsersCount = $userRegistrationsReport.Count
 
 ### Calculate MFA capable info
+Write-output "Analyzing MFA info..."
 $totalMFACapableUsers = $userRegistrationsReport | where { $_.isMfaCapable -eq $true }
 $totalMFACapableUsersCount = $totalMFACapableUsers.Count
 #Calculate percentage of MFA capable users
@@ -236,6 +239,7 @@ if ($totalUsersCount -gt 0) {
 }
 
 ###Calculate passwordless info
+Write-output "Analyzing passwordless info..."
 $totalPasswordlessUsers = $userRegistrationsReport | where { $_.isPasswordlessCapable -eq $true }
 $totalPasswordlessUsersCount = $totalPasswordlessUsers.Count
 #Calculate percentage of passwordless capable users
@@ -246,6 +250,7 @@ if ($totalUsersCount -gt 0) {
 
 ###Calculate strong authentication method info
 # Filter users who have registered strong authentication methods
+Write-output "Analyzing users who have registered strong authentication methods..."
 $usersWithStrongMethods = $userRegistrationsReport | Where-Object {
     $user = $_
     # Check if any of the user's registered methods are in the strongMethodTypes list
@@ -267,6 +272,7 @@ if ($totalUsersCount -gt 0) {
 
 ###Calculate weak authentication method info
 # Filter users who have ONLY weak authentication methods registered
+Write-output "Analyzing users who have ONLY weak authentication methods registered..."
 $usersWithWeakMethods = $userRegistrationsReport | Where-Object {
     $user = $_
     # Check if any of the user's registered methods are in the weakMethodTypes list
@@ -281,6 +287,7 @@ $usersWithWeakMethods = $userRegistrationsReport | Where-Object {
 }
 
 ###Calculate users with both strong AND weak methods
+Write-output "Analyzing users with both strong AND weak methods..."
 $usersWithBothMethodTypes = $usersWithStrongMethods | Where-Object {
     $user = $_
     # Check if this user is also in the weak methods list by comparing UPN
@@ -294,6 +301,7 @@ if ($totalUsersCount -gt 0) {
 }
 
 ### Calculate privileged users not using phish resistant methods methods
+Write-output "Analyzing privileged users not using phish resistant methods..."
 $PrivilegedUsersRegistrationDetails = Get-PrivilegedUserRegistrationDetails -userRegistrations $userRegistrationsReport
 $PrivilegedUsersNotUsingPhishResistantMethods = $PrivilegedUsersRegistrationDetails | where { $_.methodsRegistered -notcontains "fido2SecurityKey" -and $_.methodsRegistered -notcontains "passKeyDeviceBound" -and $_.methodsRegistered -notcontains "passKeyDeviceBoundAuthenticator" }
 # Count of privileged users not using phish resistant methods
@@ -1515,4 +1523,5 @@ Function Generate-EntraAuthReport {
 }
 
 # Generate the report
+Write-output "Generating HTML report..."
 Generate-EntraAuthReport -UserRegistrations $userRegistrationsReport -MethodTypes $AllMethods -OutputPath $OutputPath
