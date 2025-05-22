@@ -155,12 +155,11 @@ Function Get-UserRegistrationDetails {
     }
 
     $usersWithMobileMethods = $userRegistrations | Where-Object { $_.methodsRegistered -contains "mobilePhone" } | Select-Object id, userPrincipalName, methodsRegistered
-    $userRegistrationsMethods = [System.Collections.Generic.List[Object]]::new()
     
     Foreach ($user in $usersWithMobileMethods) {
-        $methodsFromReport = ($userRegistrations | where { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered
+        $methodsFromReport = ($userRegistrations | Where-Object { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered
         $methodsToReplace = @()
-        $methodsToReplace += $methodsFromReport | where { $_ -ne "mobilePhone" }
+        $methodsToReplace += $methodsFromReport | Where-Object { $_ -ne "mobilePhone" }
         $methodsToReplace += "Voice Call"  
         
         if (-not $skipDetailedPhoneInfo) {
@@ -170,7 +169,7 @@ Function Get-UserRegistrationDetails {
             }
         }
     
-        ($userRegistrations | where { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered = $methodsToReplace
+        ($userRegistrations | Where-Object { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered = $methodsToReplace
     }
 
     return $userRegistrations
