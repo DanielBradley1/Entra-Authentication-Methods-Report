@@ -163,7 +163,7 @@ Function Get-UserRegistrationDetails {
         $methodsToReplace += $methodsFromReport | where { $_ -ne "mobilePhone" }
         $methodsToReplace += "Voice Call"  
         
-        if (-not kipDetailedPhoneInfo) {
+        if (-not $skipDetailedPhoneInfo) {
             $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.id)/authentication/methods" -OutputType PSObject | WHere { $_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod'}
             if ($Methods.smsSignInState -eq "ready") { 
                 $methodsToReplace += "SMS" 
