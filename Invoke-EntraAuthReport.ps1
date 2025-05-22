@@ -40,10 +40,13 @@
 .PARAMETER limit
  Defines how many userRegistrationDetails records to fetch.
 
-.PARAMETER ignoreguest
- Ignores all the users of type 'guest'.
+.PARAMETER skipGuest
+ Skip all the users of type 'guest'.
 
-.PARAMETER openbrowser
+.PARAMETER skipDetailedPhoneInfo
+ Skip the request for detailed Mobile authentication methods.
+
+.PARAMETER openBrowser
  If true, opens the generated report in the browser.
 
 .EXAMPLE
@@ -60,10 +63,13 @@ param(
     [int]$limit = 20000,
 
     [Parameter(Mandatory = $false)]
-    [switch]$ignoreguest = $false,
+    [switch]$skipGuest = $false,
 
     [Parameter(Mandatory = $false)]
-    [switch]$openbrowser = $false
+    [switch]$skipDetailedPhoneInfo = $false,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$openBrowser = $false
 )
 
 # Check Microsoft Graph connection
@@ -144,22 +150,29 @@ Function Get-UserRegistrationDetails {
     #Lists all users and their user mfa registration details including their default method
     $userRegistrations = Invoke-MgGraphRequest -Uri "Beta/reports/authenticationMethods/userRegistrationDetails?`$top=$limit&`$orderby=userPrincipalName" -OutputType PSObject | Select -Expand Value
     
-    if ($ignoreguest) {
+    if ($skipGuest) {
         $userRegistrations = $userRegistrations | Where-Object { $_.userType -ne "guest" }
     }
 
-    $usersWithMobileMethods = $userRegistrations | where { $_.methodsRegistered -contains "mobilePhone" } | Select id, userPrincipalName, methodsRegistered
+    $usersWithMobileMethods = $userRegistrations | Where-Object { $_.methodsRegistered -contains "mobilePhone" } | Select-Object id, userPrincipalName, methodsRegistered
     $userRegistrationsMethods = [System.Collections.Generic.List[Object]]::new()
+    
     Foreach ($user in $usersWithMobileMethods) {
-        $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.id)/authentication/methods" -OutputType PSObject | WHere { $_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod' }
-        if ($Methods.smsSignInState -eq "ready") { $phoneinfo = @("Voice Call", "SMS") }else { $phoneinfo = @("Voice Call") }
         $methodsFromReport = ($userRegistrations | where { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered
         $methodsToReplace = @()
         $methodsToReplace += $methodsFromReport | where { $_ -ne "mobilePhone" }
-        foreach ($item in $phoneinfo) { $methodsToReplace += $item }
+        $methodsToReplace += "Voice Call"  
+        
+        if (-not kipDetailedPhoneInfo) {
+            $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.id)/authentication/methods" -OutputType PSObject | WHere { $_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod'}
+            if ($Methods.smsSignInState -eq "ready") { 
+                $methodsToReplace += "SMS" 
+            }
+        }
+    
         ($userRegistrations | where { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered = $methodsToReplace
     }
-    
+
     return $userRegistrations
 }
 
@@ -188,22 +201,22 @@ Function Get-PrivilegedUserRegistrationDetails {
 
 ###Method types array
 $AllMethods = @(
-    [pscustomobject]@{type = 'microsoftAuthenticatorPasswordless'; Name = 'Microsoft Authenticator Passwordless'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'fido2SecurityKey'; AltName = 'Fido2'; Name = 'Fido2 Security Key'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'passKeyDeviceBound'; AltName = 'Fido2'; Name = 'Device Bound Passkey'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'passKeyDeviceBoundAuthenticator'; AltName = 'Fido2'; Name = 'Microsoft Authenticator Passkey'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'passKeyDeviceBoundWindowsHello'; AltName = 'Fido2'; Name = 'Windows Hello Passkey'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'microsoftAuthenticatorPush'; AltName = 'MicrosoftAuthenticator'; Name = 'Microsoft Authenticator App'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'softwareOneTimePasscode'; AltName = 'SoftwareOath'; Name = 'Software OTP'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'hardwareOneTimePasscode'; AltName = 'HardwareOath'; Name = 'Hardware OTP'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'windowsHelloForBusiness'; AltName = 'windowsHelloForBusiness'; Name = 'Windows Hello for Business'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'temporaryAccessPass'; AltName = 'TemporaryAccessPass'; Name = 'Temporary Access Pass'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'macOsSecureEnclaveKey'; Name = 'MacOS Secure Enclave Key'; Strength = 'Strong' }
-    [pscustomobject]@{type = 'SMS'; AltName = 'SMS'; Name = 'SMS'; Strength = 'Weak' }
-    [pscustomobject]@{type = 'Voice Call'; AltName = 'voice'; Name = 'Voice Call'; Strength = 'Weak' }
-    [pscustomobject]@{type = 'email'; AltName = 'Email'; Name = 'Email'; Strength = 'Weak' }
-    [pscustomobject]@{type = 'alternateMobilePhone'; AltName = 'Voice'; Name = 'Alternative Mobile Phone'; Strength = 'Weak' }
-    [pscustomobject]@{type = 'securityQuestion'; AltName = 'Security Questions'; Name = 'Security Questions'; Strength = 'Weak' }
+    [pscustomobject]@{type='microsoftAuthenticatorPasswordless';Name='Microsoft Authenticator Passwordless';Strength='Strong'}
+    [pscustomobject]@{type='fido2SecurityKey';AltName='Fido2';Name='Fido2 Security Key';Strength='Strong'}
+    [pscustomobject]@{type='passKeyDeviceBound';AltName='Fido2';Name='Device Bound Passkey';Strength='Strong'}
+    [pscustomobject]@{type='passKeyDeviceBoundAuthenticator';AltName='Fido2';Name='Microsoft Authenticator Passkey';Strength='Strong'}
+    [pscustomobject]@{type='passKeyDeviceBoundWindowsHello';AltName='Fido2';Name='Windows Hello Passkey';Strength='Strong'}
+    [pscustomobject]@{type='microsoftAuthenticatorPush';AltName='MicrosoftAuthenticator';Name='Microsoft Authenticator App';Strength='Strong'}
+    [pscustomobject]@{type='softwareOneTimePasscode';AltName='SoftwareOath';Name='Software OTP';Strength='Strong'}
+    [pscustomobject]@{type='hardwareOneTimePasscode';AltName='HardwareOath';Name='Hardware OTP';Strength='Strong'}
+    [pscustomobject]@{type='windowsHelloForBusiness';AltName='windowsHelloForBusiness';Name='Windows Hello for Business';Strength='Strong'}
+    [pscustomobject]@{type='temporaryAccessPass';AltName='TemporaryAccessPass';Name='Temporary Access Pass';Strength='Strong'}
+    [pscustomobject]@{type='macOsSecureEnclaveKey';Name='MacOS Secure Enclave Key';Strength='Strong'}
+    [pscustomobject]@{type='SMS';AltName='SMS';Name='SMS';Strength='Weak'}
+    [pscustomobject]@{type='Voice Call';AltName='voice';Name='Voice Call';Strength='Weak'}
+    [pscustomobject]@{type='email';AltName='Email';Name='Email';Strength='Weak'}
+    [pscustomobject]@{type='alternateMobilePhone';AltName='Voice';Name='Alternative Mobile Phone';Strength='Weak'}
+    [pscustomobject]@{type='securityQuestion';AltName='Security Questions';Name='Security Questions';Strength='Weak'}
 )
 $strongMethodTypes = $AllMethods | Where-Object { $_.Strength -eq 'Strong' } | Select-Object -ExpandProperty type
 $weakMethodTypes = $AllMethods | Where-Object { $_.Strength -eq 'Weak' }
@@ -300,7 +313,7 @@ if ($totalUsersCount -gt 0) {
     $bothMethodsPercentage = [math]::Round(($totalBothMethodTypesCount / $totalUsersCount) * 100, 2)
 }
 
-### Calculate privileged users not using phish resistant methods methods
+### Calculate privileged users not using phish resistant methods
 Write-output "Analyzing privileged users not using phish resistant methods..."
 $PrivilegedUsersRegistrationDetails = Get-PrivilegedUserRegistrationDetails -userRegistrations $userRegistrationsReport
 $PrivilegedUsersNotUsingPhishResistantMethods = $PrivilegedUsersRegistrationDetails | where { $_.methodsRegistered -notcontains "fido2SecurityKey" -and $_.methodsRegistered -notcontains "passKeyDeviceBound" -and $_.methodsRegistered -notcontains "passKeyDeviceBoundAuthenticator" }
@@ -308,6 +321,7 @@ $PrivilegedUsersNotUsingPhishResistantMethods = $PrivilegedUsersRegistrationDeta
 $PrivilegedUsersNotUsingPhishResistantMethodsCount = $PrivilegedUsersNotUsingPhishResistantMethods.Count
 
 ## Generate HTML report
+Write-output "Generating HTML report..."
 Function Generate-EntraAuthReport {
     param(
         [Parameter(Mandatory = $true)]
@@ -322,7 +336,7 @@ Function Generate-EntraAuthReport {
     
     # Create HTML header
     $html = [System.Text.StringBuilder]::new()
-
+    
     [void]$html.AppendLine(@"
 <!DOCTYPE html>
 <html lang="en">
@@ -1044,7 +1058,9 @@ Function Generate-EntraAuthReport {
 "@)
 
     # Add a row for each user
-    foreach ($user in $UserRegistrations) {
+    for ($i = 0; $i -lt $UserRegistrations.Count; $i++) {
+        $user = $UserRegistrations[$i]
+    
         $userMethods = $user.methodsRegistered
         $userHasStrong = $false
         $userHasWeak = $false
@@ -1519,11 +1535,10 @@ Function Generate-EntraAuthReport {
     Write-output "HTML report generated at $OutputPath"
     
     # Open the report in the default browser
-    if ($openbrowser) {
+    if ($openBrowser) {
         Start-Process $OutputPath
     }
 }
 
 # Generate the report
-Write-output "Generating HTML report..."
 Generate-EntraAuthReport -UserRegistrations $userRegistrationsReport -MethodTypes $AllMethods -OutputPath $OutputPath
