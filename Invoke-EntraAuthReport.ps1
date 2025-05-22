@@ -148,10 +148,10 @@ Function Get-UserRegistrationDetails {
         $userRegistrations = $userRegistrations | Where-Object { $_.userType -ne "guest" }
     }
 
-    $usersWithMobileMethods = $userRegistrations | where { $_.methodsRegistered -contains "mobilePhone" } | Select userPrincipalName, methodsRegistered
+    $usersWithMobileMethods = $userRegistrations | where { $_.methodsRegistered -contains "mobilePhone" } | Select id, userPrincipalName, methodsRegistered
     $userRegistrationsMethods = [System.Collections.Generic.List[Object]]::new()
     Foreach ($user in $usersWithMobileMethods) {
-        $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.userPrincipalName)/authentication/methods" -OutputType PSObject | WHere { $_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod' }
+        $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.id)/authentication/methods" -OutputType PSObject | WHere { $_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod' }
         if ($Methods.smsSignInState -eq "ready") { $phoneinfo = @("Voice Call", "SMS") }else { $phoneinfo = @("Voice Call") }
         $methodsFromReport = ($userRegistrations | where { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered
         $methodsToReplace = @()
