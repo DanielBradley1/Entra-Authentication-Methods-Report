@@ -1502,7 +1502,7 @@ Function Generate-EntraAuthReport {
 "@
 
     # Generate the path
-    $OutputPath = "$outpath\Entra_Authentication_Methods_Report.html"
+    $OutputPath = Join-Path -Path $outpath -ChildPath "Entra_Authentication_Methods_Report.html"
 
     # Output HTML report
     $html | Out-File -FilePath $OutputPath -Encoding UTF8
