@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 0.3.1
+.VERSION 0.4.0
 
 .GUID bbda77a3-7d1c-415e-9c28-7c934971599c
 
@@ -37,22 +37,46 @@
 .PARAMETER outpath
  Specified the output path of the report file.
 
+.PARAMETER limit
+ Defines how many userRegistrationDetails records to fetch.
+
+.PARAMETER skipGuest
+ Skip all the users of type 'guest'.
+
+.PARAMETER skipDetailedPhoneInfo
+ Skip the request for detailed Mobile authentication methods.
+
+.PARAMETER openBrowser
+ If true, opens the generated report in the browser.
+
 .EXAMPLE
 PS> Invoke-EntraAuthReport -outpath "C:\Reports\EntraAuthReport.html"
 #>
 
 #Params
 param(
-     [Parameter(Mandatory)]
-     [ValidateNotNullOrEmpty()]
-     [string]$outpath
- )
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [string]$outpath,
+
+    [Parameter(Mandatory = $false)]
+    [int]$limit = 20000,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$skipGuest = $false,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$skipDetailedPhoneInfo = $false,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$openBrowser = $false
+)
 
 # Check Microsoft Graph connection
 $state = Get-MgContext
 
 # Define required permissions properly as an array of strings
-$requiredPerms = @("Policy.Read.All","Organization.Read.All","AuditLog.Read.All","UserAuthenticationMethod.Read.All","RoleAssignmentSchedule.Read.Directory","RoleEligibilitySchedule.Read.Directory")
+$requiredPerms = @("Policy.Read.All", "Organization.Read.All", "AuditLog.Read.All", "UserAuthenticationMethod.Read.All", "RoleAssignmentSchedule.Read.Directory", "RoleEligibilitySchedule.Read.Directory")
 
 # Check if we're connected and have all required permissions
 $hasAllPerms = $false
@@ -66,11 +90,13 @@ if ($state) {
     if ($missingPerms.Count -eq 0) {
         $hasAllPerms = $true
         Write-output "Connected to Microsoft Graph with all required permissions"
-    } else {
+    }
+    else {
         Write-output "Missing required permissions: $($missingPerms -join ', ')"
         Write-output "Reconnecting with all required permissions..."
     }
-} else {
+}
+else {
     Write-output "Not connected to Microsoft Graph. Connecting now..."
 }
 
@@ -79,7 +105,8 @@ if (-not $hasAllPerms) {
     try {
         Connect-MgGraph -Scopes $requiredPerms -ErrorAction Stop -NoWelcome
         Write-output "Successfully connected to Microsoft Graph"
-    } catch {
+    }
+    catch {
         Write-Error "Failed to connect to Microsoft Graph: $_"
         exit
     }
@@ -89,11 +116,12 @@ if (-not $hasAllPerms) {
 $items = @("AAD_PREMIUM_P2", "AAD_PREMIUM", "AAD_BASIC")
 $Skus = Invoke-MgGraphRequest -Uri "Beta/subscribedSkus" -OutputType PSObject | Select -Expand Value
 foreach ($item in $items) {
-    $Search = $skus | ? {$_.ServicePlans.servicePlanName -contains "$item"}
+    $Search = $skus | ? { $_.ServicePlans.servicePlanName -contains "$item" }
     if ($Search) {
         $licenseplan = $item
         break
-    } ElseIf ((!$Search) -and ($item -eq "AAD_BASIC")){
+    }
+    ElseIf ((!$Search) -and ($item -eq "AAD_BASIC")) {
         $licenseplan = $item
         break
     }
@@ -108,30 +136,42 @@ Function Get-AuthenticationMethods {
     $policiesReport = [System.Collections.Generic.List[Object]]::new()
     forEach ($policy in $policies) {
         $obj = [PSCustomObject][ordered]@{
-            "Type" = if($policy.displayName){"Custom"}else{"Built-in"}
-            "DisplayName" = if($policy.displayName){$policy.displayName}else{$policy.id}
-            "State" = $policy.state
-            "Aliases" = ($policy.includeTargets.id -join [environment]::NewLine)
+            "Type"        = if ($policy.displayName) { "Custom" }else { "Built-in" }
+            "DisplayName" = if ($policy.displayName) { $policy.displayName }else { $policy.id }
+            "State"       = $policy.state
+            "Aliases"     = ($policy.includeTargets.id -join [environment]::NewLine)
         }
         $policiesReport.Add($obj)
-     }
-     return $policiesReport
+    }
+    return $policiesReport
 }
 
 Function Get-UserRegistrationDetails {
     #Lists all users and their user mfa registration details including their default method
-    $userRegistrations = Invoke-MgGraphRequest -Uri "Beta/reports/authenticationMethods/userRegistrationDetails?`$top=20000&`$orderby=userPrincipalName" -OutputType PSObject | Select -Expand Value
-    $usersWithMobileMethods = $userRegistrations | where {$_.methodsRegistered -contains "mobilePhone"} | Select userPrincipalName, methodsRegistered
-    $userRegistrationsMethods = [System.Collections.Generic.List[Object]]::new()
-    Foreach ($user in $usersWithMobileMethods){
-        $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.userPrincipalName)/authentication/methods" -OutputType PSObject | WHere {$_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod'}
-        if ($Methods.smsSignInState -eq "ready") {$phoneinfo = @("Voice Call","SMS")}else{$phoneinfo = @("Voice Call")}
-        $methodsFromReport = ($userRegistrations | where {$_.userPrincipalName -eq $user.userPrincipalName}).methodsRegistered
-        $methodsToReplace = @()
-        $methodsToReplace += $methodsFromReport | where {$_ -ne "mobilePhone"}
-        foreach ($item in $phoneinfo){$methodsToReplace += $item}
-        ($userRegistrations | where {$_.userPrincipalName -eq $user.userPrincipalName}).methodsRegistered = $methodsToReplace
+    $userRegistrations = Invoke-MgGraphRequest -Uri "Beta/reports/authenticationMethods/userRegistrationDetails?`$top=$limit&`$orderby=userPrincipalName" -OutputType PSObject | Select -Expand Value
+    
+    if ($skipGuest) {
+        $userRegistrations = $userRegistrations | Where-Object { $_.userType -ne "guest" }
     }
+
+    $usersWithMobileMethods = $userRegistrations | Where-Object { $_.methodsRegistered -contains "mobilePhone" } | Select-Object id, userPrincipalName, methodsRegistered
+    
+    Foreach ($user in $usersWithMobileMethods) {
+        $methodsFromReport = ($userRegistrations | Where-Object { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered
+        $methodsToReplace = @()
+        $methodsToReplace += $methodsFromReport | Where-Object { $_ -ne "mobilePhone" }
+        $methodsToReplace += "Voice Call"  
+        
+        if (-not $skipDetailedPhoneInfo) {
+            $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.id)/authentication/methods" -OutputType PSObject | WHere { $_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod'}
+            if ($Methods.smsSignInState -eq "ready") { 
+                $methodsToReplace += "SMS" 
+            }
+        }
+    
+        ($userRegistrations | Where-Object { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered = $methodsToReplace
+    }
+
     return $userRegistrations
 }
 
@@ -146,14 +186,15 @@ Function Get-PrivilegedUserRegistrationDetails {
         $EligiblePIMRoles = Invoke-MgGraphRequest -Uri "beta/roleManagement/directory/roleEligibilitySchedules?`$expand=*" -OutputType PSObject | Select -Expand Value
         $AssignedPIMRoles = Invoke-MgGraphRequest -Uri "beta/roleManagement/directory/roleAssignmentSchedules?`$expand=*" -OutputType PSObject | Select -Expand Value
         $DirectoryRoles = $EligiblePIMRoles + $AssignedPIMRoles
-        $DirectoryRoleUsers = $DirectoryRoles | Where {$_.Principal.'@odata.type' -eq "#microsoft.graph.user"}
+        $DirectoryRoleUsers = $DirectoryRoles | Where { $_.Principal.'@odata.type' -eq "#microsoft.graph.user" }
         $RoleMembers = $DirectoryRoleUsers.Principal.userPrincipalName | Select-Object -Unique
-    }else{
+    }
+    else {
         #Get all members or directory roles
         $DirectoryRoles = Invoke-MgGraphRequest -Uri "/beta/directoryRoles?" -OutputType PSObject | Select -Expand Value
-        $RoleMembers = $DirectoryRoles | ForEach-Object { Invoke-MgGraphRequest -uri "/beta/directoryRoles/$($_.id)/members" -OutputType PSObject | Select -Expand Value} | where {$_.'@odata.type' -eq "#microsoft.graph.user"} | Select-Object -expand userPrincipalName -Unique
+        $RoleMembers = $DirectoryRoles | ForEach-Object { Invoke-MgGraphRequest -uri "/beta/directoryRoles/$($_.id)/members" -OutputType PSObject | Select -Expand Value } | where { $_.'@odata.type' -eq "#microsoft.graph.user" } | Select-Object -expand userPrincipalName -Unique
     }
-    $PrivilegedUserRegistrationDetails = $userRegistrationsReport | where {$RoleMembers -contains $_.userPrincipalName}
+    $PrivilegedUserRegistrationDetails = $userRegistrationsReport | where { $RoleMembers -contains $_.userPrincipalName }
     Return $PrivilegedUserRegistrationDetails
 }
 
@@ -181,24 +222,27 @@ $weakMethodTypes = $AllMethods | Where-Object { $_.Strength -eq 'Weak' }
 
 ###Get authentication methods info
 #Get user registration details
+Write-output "Fetching users registration details..."
 $userRegistrationsReport = Get-UserRegistrationDetails
 #Get authentication methods
+Write-output "Fetching authentication methods..."
 $authenticationMethods = Get-AuthenticationMethods
 #Get disabled and enabled authentication methods
-$disabledAuthenticationMethods = $authenticationMethods | where {$_.State -eq "Disabled"}
-$enabledAuthenticationMethods = $authenticationMethods | where {$_.State -eq "Enabled"}
+$disabledAuthenticationMethods = $authenticationMethods | where { $_.State -eq "Disabled" }
+$enabledAuthenticationMethods = $authenticationMethods | where { $_.State -eq "Enabled" }
 #Get methods enabled and disabled by policy
-$MethodsDisabledByPolicy = $AllMethods | Where {$_.AltName -in $disabledAuthenticationMethods.DisplayName}
-$MethodsEnabledByPolicy = $AllMethods | Where {$_.AltName -in $enabledAuthenticationMethods.DisplayName}
+$MethodsDisabledByPolicy = $AllMethods | Where { $_.AltName -in $disabledAuthenticationMethods.DisplayName }
+$MethodsEnabledByPolicy = $AllMethods | Where { $_.AltName -in $enabledAuthenticationMethods.DisplayName }
 #get weak authentication methods and count
-$enabledWeakAuthenticationMethods = $MethodsEnabledByPolicy | where {$_.Strength -eq "Weak"}
+$enabledWeakAuthenticationMethods = $MethodsEnabledByPolicy | where { $_.Strength -eq "Weak" }
 
 ###Calculate totals
 #Total number of users
 $totalUsersCount = $userRegistrationsReport.Count
 
 ### Calculate MFA capable info
-$totalMFACapableUsers = $userRegistrationsReport | where {$_.isMfaCapable -eq $true}
+Write-output "Analyzing MFA info..."
+$totalMFACapableUsers = $userRegistrationsReport | where { $_.isMfaCapable -eq $true }
 $totalMFACapableUsersCount = $totalMFACapableUsers.Count
 #Calculate percentage of MFA capable users
 $MfaCapablePercentage = 0
@@ -207,7 +251,8 @@ if ($totalUsersCount -gt 0) {
 }
 
 ###Calculate passwordless info
-$totalPasswordlessUsers = $userRegistrationsReport | where {$_.isPasswordlessCapable -eq $true}
+Write-output "Analyzing passwordless info..."
+$totalPasswordlessUsers = $userRegistrationsReport | where { $_.isPasswordlessCapable -eq $true }
 $totalPasswordlessUsersCount = $totalPasswordlessUsers.Count
 #Calculate percentage of passwordless capable users
 $passwordlessCapablePercentage = 0
@@ -217,6 +262,7 @@ if ($totalUsersCount -gt 0) {
 
 ###Calculate strong authentication method info
 # Filter users who have registered strong authentication methods
+Write-output "Analyzing users who have registered strong authentication methods..."
 $usersWithStrongMethods = $userRegistrationsReport | Where-Object {
     $user = $_
     # Check if any of the user's registered methods are in the strongMethodTypes list
@@ -238,6 +284,7 @@ if ($totalUsersCount -gt 0) {
 
 ###Calculate weak authentication method info
 # Filter users who have ONLY weak authentication methods registered
+Write-output "Analyzing users who have ONLY weak authentication methods registered..."
 $usersWithWeakMethods = $userRegistrationsReport | Where-Object {
     $user = $_
     # Check if any of the user's registered methods are in the weakMethodTypes list
@@ -252,6 +299,7 @@ $usersWithWeakMethods = $userRegistrationsReport | Where-Object {
 }
 
 ###Calculate users with both strong AND weak methods
+Write-output "Analyzing users with both strong AND weak methods..."
 $usersWithBothMethodTypes = $usersWithStrongMethods | Where-Object {
     $user = $_
     # Check if this user is also in the weak methods list by comparing UPN
@@ -264,27 +312,31 @@ if ($totalUsersCount -gt 0) {
     $bothMethodsPercentage = [math]::Round(($totalBothMethodTypesCount / $totalUsersCount) * 100, 2)
 }
 
-### Calculate privileged users not using phish resistant methods methods
+### Calculate privileged users not using phish resistant methods
+Write-output "Analyzing privileged users not using phish resistant methods..."
 $PrivilegedUsersRegistrationDetails = Get-PrivilegedUserRegistrationDetails -userRegistrations $userRegistrationsReport
-$PrivilegedUsersNotUsingPhishResistantMethods = $PrivilegedUsersRegistrationDetails | where {$_.methodsRegistered -notcontains "fido2SecurityKey" -and $_.methodsRegistered -notcontains "passKeyDeviceBound" -and $_.methodsRegistered -notcontains "passKeyDeviceBoundAuthenticator"}
+$PrivilegedUsersNotUsingPhishResistantMethods = $PrivilegedUsersRegistrationDetails | where { $_.methodsRegistered -notcontains "fido2SecurityKey" -and $_.methodsRegistered -notcontains "passKeyDeviceBound" -and $_.methodsRegistered -notcontains "passKeyDeviceBoundAuthenticator" }
 # Count of privileged users not using phish resistant methods
 $PrivilegedUsersNotUsingPhishResistantMethodsCount = $PrivilegedUsersNotUsingPhishResistantMethods.Count
 
 ## Generate HTML report
+Write-output "Generating HTML report..."
 Function Generate-EntraAuthReport {
     param(
-        [Parameter(Mandatory=$true)]
+        [Parameter(Mandatory = $true)]
         [array]$UserRegistrations,
         
-        [Parameter(Mandatory=$true)]
+        [Parameter(Mandatory = $true)]
         [array]$MethodTypes,
         
-        [Parameter(Mandatory=$false)]
+        [Parameter(Mandatory = $false)]
         [string]$OutputPath = "C:\GitHub\Private\Reports\EntraAuthenticationReport.html"
     )
     
     # Create HTML header
-    $html = @"
+    $html = [System.Text.StringBuilder]::new()
+    
+    [void]$html.AppendLine(@"
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -981,7 +1033,7 @@ Function Generate-EntraAuthReport {
                         <th style="width: 7%;">Default Method</th>
                         <th style="width: 5%;">MFA</th>
                         <th style="width: 5%;">Pless</th>
-"@
+"@)
 
     # Add column for each method type
     foreach ($method in $MethodTypes) {
@@ -991,20 +1043,23 @@ Function Generate-EntraAuthReport {
         $isDisabled = $MethodsDisabledByPolicy.Name -contains $method.Name
         
         if ($isDisabled) {
-            $html += "                    <th class=`"$cssClass diagonal-header`" data-disabled=`"true`"><div>$($method.Name)</div></th>`n"
-        } else {
-            $html += "                    <th class=`"$cssClass diagonal-header`" ><div>$($method.Name)</div></th>`n"
+            [void]$html.AppendLine("                    <th class=`"$cssClass diagonal-header`" data-disabled=`"true`"><div>$($method.Name)</div></th>`n")
+        }
+        else {
+            [void]$html.AppendLine("                    <th class=`"$cssClass diagonal-header`" ><div>$($method.Name)</div></th>`n")
         }
     }
 
-    $html += @"
+    [void]$html.AppendLine(@"
                 </tr>
             </thead>
             <tbody>
-"@
+"@)
 
     # Add a row for each user
-    foreach ($user in $UserRegistrations) {
+    for ($i = 0; $i -lt $UserRegistrations.Count; $i++) {
+        $user = $UserRegistrations[$i]
+    
         $userMethods = $user.methodsRegistered
         $userHasStrong = $false
         $userHasWeak = $false
@@ -1042,22 +1097,22 @@ Function Generate-EntraAuthReport {
         if ($isPrivileged) { $dataAttributes += "data-privileged='true' " }
         if ($isSyncUser) { $dataAttributes += "data-syncuser='true' " }
         
-        $html += "                <tr $dataAttributes>`n"
-        $html += "                    <td>$($user.userPrincipalName)</td>`n"
-        $html += "                    <td>$($user.defaultmfaMethod)</td>`n"
-        $html += "                    <td>$(if($user.isMfaCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n"
-        $html += "                    <td>$(if($user.isPasswordlessCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n"
+        [void]$html.AppendLine("                <tr $dataAttributes>`n")
+        [void]$html.AppendLine("                    <td>$($user.userPrincipalName)</td>`n")
+        [void]$html.AppendLine("                    <td>$($user.defaultmfaMethod)</td>`n")
+        [void]$html.AppendLine("                    <td>$(if($user.isMfaCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n")
+        [void]$html.AppendLine("                    <td>$(if($user.isPasswordlessCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n")
         
         # Add column for each method type - check if registered
         foreach ($method in $MethodTypes) {
             $isRegistered = $userMethods -contains $method.type
-            $html += "                    <td>$(if($isRegistered) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n"
+            [void]$html.AppendLine("                    <td>$(if($isRegistered) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n")
         }
         
-        $html += "                </tr>`n"
+        [void]$html.AppendLine("                </tr>`n")
     }
 
-    $html += @"
+    [void]$html.AppendLine(@"
             </tbody>
         </table>
     </div>
@@ -1469,17 +1524,19 @@ Function Generate-EntraAuthReport {
     </script>
 </body>
 </html>
-"@
+"@)
 
     # Generate the path
-    $OutputPath = "$outpath\Entra_Authentication_Methods_Report.html"
+    $OutputPath = Join-Path -Path $outpath -ChildPath "Entra_Authentication_Methods_Report.html"
 
     # Output HTML report
-    $html | Out-File -FilePath $OutputPath -Encoding UTF8
+    $html.ToString() | Out-File -FilePath $OutputPath -Encoding UTF8
     Write-output "HTML report generated at $OutputPath"
     
     # Open the report in the default browser
-    Start-Process $OutputPath
+    if ($openBrowser) {
+        Start-Process $OutputPath
+    }
 }
 
 # Generate the report
