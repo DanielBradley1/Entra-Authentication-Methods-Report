@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 0.4.0
+.VERSION 0.5.0
 
 .GUID bbda77a3-7d1c-415e-9c28-7c934971599c
 
@@ -28,6 +28,8 @@
     v0.1 - Initial release
     v0.2 - Fix output path issues
     v0.3 - Added export functionality, examples and increased registration details report size to 20,000.
+    v0.4 - Added limit, skipGuest, skipDetailedPhoneInfo and openBrowser parameters.
+    v0.5 - Improved overall performance and UX with high number of users.
 #>
 
 <#
@@ -157,7 +159,7 @@ Function Get-UserRegistrationDetails {
     $usersWithMobileMethods = $userRegistrations | Where-Object { $_.methodsRegistered -contains "mobilePhone" } | Select-Object id, userPrincipalName, methodsRegistered
     
     Foreach ($user in $usersWithMobileMethods) {
-        $methodsFromReport = ($userRegistrations | Where-Object { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered
+        $methodsFromReport = $user.methodsRegistered
         $methodsToReplace = @()
         $methodsToReplace += $methodsFromReport | Where-Object { $_ -ne "mobilePhone" }
         $methodsToReplace += "Voice Call"  
@@ -169,7 +171,7 @@ Function Get-UserRegistrationDetails {
             }
         }
     
-        ($userRegistrations | Where-Object { $_.userPrincipalName -eq $user.userPrincipalName }).methodsRegistered = $methodsToReplace
+        $user.methodsRegistered = $methodsToReplace
     }
 
     return $userRegistrations
@@ -319,6 +321,33 @@ $PrivilegedUsersNotUsingPhishResistantMethods = $PrivilegedUsersRegistrationDeta
 # Count of privileged users not using phish resistant methods
 $PrivilegedUsersNotUsingPhishResistantMethodsCount = $PrivilegedUsersNotUsingPhishResistantMethods.Count
 
+function Minify-HTML {
+    param([string]$html)
+    
+    $codeBlocks = @()
+    $pattern = '(<pre.*?>.*?</pre>|<code.*?>.*?</code>)'
+    $html = [regex]::Replace($html, $pattern, {
+        param($match)
+        $codeBlocks += $match.Value
+        return "CODE_BLOCK_PLACEHOLDER_$($codeBlocks.Count - 1)"
+    }, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    
+    $html = $html -replace '<!--(?!\[if)(.*?)-->', ''
+    
+    $html = $html -replace '>\s+<', '><'
+    $html = $html -replace '\s{2,}', ' '
+    
+    $html = $html -replace '\s+>', '>'
+    $html = $html -replace '>\s+', '>'
+    $html = $html -replace '\s+/>', '/>'
+    
+    for ($i = 0; $i -lt $codeBlocks.Count; $i++) {
+        $html = $html -replace "CODE_BLOCK_PLACEHOLDER_$i", $codeBlocks[$i]
+    }
+    
+    return $html.Trim()
+}
+
 ## Generate HTML report
 Write-output "Generating HTML report..."
 Function Generate-EntraAuthReport {
@@ -332,7 +361,75 @@ Function Generate-EntraAuthReport {
         [Parameter(Mandatory = $false)]
         [string]$OutputPath = "C:\GitHub\Private\Reports\EntraAuthenticationReport.html"
     )
+
+    # Define Auth methods headers
+    $authMethodsHeaders = $MethodTypes | ForEach-Object {
+        $cssClass = if ($_.Strength -eq "Strong") { "strong-method" } else { "weak-method" }
+        $dataAttributes = ""
+
+        # Check if this method is disabled by policy
+        $isDisabled = $MethodsDisabledByPolicy.Name -contains $_.Name
+        
+        if ($isDisabled) {
+            $dataAttributes = "data-disabled=`"true`""
+        }
+        
+        return "<th class=`"$($cssClass) diagonal-header`" $($dataAttributes)><div>$($_.Name)</div></th>"
+    } | Out-String
+
+    # Process only relevant data
+    $tableData = $UserRegistrations | ForEach-Object {
+        $hasStrongMethods = $false
+        $hasWeakMethods = $false
+        $isPrivileged = $false
+        $isSync = $false
+        $isExternal = $false
+        
+        # Check if user has strong or weak methods
+        foreach ($method in $_.methodsRegistered) {
+            if ($strongMethodTypes -contains $method) {
+                $hasStrongMethods = $true
+            }
+            if ($weakMethodTypes.type -contains $method) {
+                $hasWeakMethods = $true
+            }
+        }
+
+        # Check if user is privileged
+        if ($PrivilegedUsersRegistrationDetails.userPrincipalName -contains $_.userPrincipalName) {
+            $isPrivileged = $true
+        }
+
+        # Check if user is a sync user
+        if (($_.userPrincipalName -like "Sync_*") -or ($_.userPrincipalName -like "ADToAADSyncServiceAccount*")) {
+            $isSyncUser = $true
+        }
+
+        # Check if user is an external user
+        if ($_.userPrincipalName -like "*#EXT#*") {
+            $isExternal = $true
+        }
+
+        [PSCustomObject]@{
+            userPrincipalName = $_.userPrincipalName
+            methodsRegistered = $_.methodsRegistered
+            defaultMfaMethod = $_.defaultMfaMethod
+            hasStrongMethods = $hasStrongMethods
+            hasWeakMethods = $hasWeakMethods
+            isPasswordlessCapable = $_.isPasswordlessCapable
+            isMfaCapable = $_.isMfaCapable
+            isPrivileged = $isPrivileged
+            isSync = $isSync
+            isExternal = $isExternal
+        }
+    }
     
+    # Convert to JSON
+    $userRegistrationsJson = $tableData | ConvertTo-Json -Compress
+    $methodTypesJson = $MethodTypes | ConvertTo-Json -Compress
+    
+    $backtick = [char]96
+
     # Create HTML header
     $html = [System.Text.StringBuilder]::new()
     
@@ -599,9 +696,8 @@ Function Generate-EntraAuthReport {
             border-radius: 8px;
             position: relative; /* Keep relative positioning */
         }
-        
-        /* Style for expand icon - now positioned as a filter button */
-        .expand-icon {
+
+        #expand-button {
             padding: 8px 15px;
             background-color: #eee;
             border: none;
@@ -612,14 +708,14 @@ Function Generate-EntraAuthReport {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-left: auto; /* Push to right side of filter container */
+            margin-left: 0;
         }
         
-        .expand-icon:hover {
+        #expand-button:hover {
             background-color: #ddd;
         }
         
-        .expand-icon svg {
+        #expand-button svg {
             width: 16px;
             height: 16px;
             margin-right: 5px;
@@ -682,6 +778,13 @@ Function Generate-EntraAuthReport {
         .filter-button.active {
             background-color: #0078D4;
             color: white;
+        }
+        .pagination-container {
+            padding: 10px;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 15px;
         }
         .footer {
             text-align: center;
@@ -758,10 +861,6 @@ Function Generate-EntraAuthReport {
             gap: 20px;
             margin-bottom: 20px;
         }
-        /* Add data attribute styling for sync users */
-        [data-syncuser='true'] {
-            /* No specific styling needed as we'll just hide them with JS */
-        }
         
         /* Modal styles for fullscreen table */
         .modal {
@@ -786,7 +885,7 @@ Function Generate-EntraAuthReport {
             position: relative;
         }
         
-        .close-modal {
+        #close-modal-button {
             color: #666;
             position: absolute;
             top: 15px;
@@ -805,7 +904,7 @@ Function Generate-EntraAuthReport {
             transition: all 0.2s ease;
         }
         
-        .close-modal:hover {
+        #close-modal-button:hover {
             background-color: #e0e0e0;
             color: #333;
         }
@@ -830,8 +929,7 @@ Function Generate-EntraAuthReport {
             overflow: hidden; /* Prevent scrolling of background when modal is open */
         }
 
-        /* Style for export button - similar to expand icon */
-        .export-csv-button {
+        #export-csv-button {
             padding: 8px 15px;
             background-color: #eee;
             border: none;
@@ -846,22 +944,16 @@ Function Generate-EntraAuthReport {
             margin-right: 10px; /* Add space between export and expand buttons */
         }
         
-        .export-csv-button:hover {
+        #export-csv-button:hover {
             background-color: #ddd;
         }
         
-        .export-csv-button svg {
+        #export-csv-button svg {
             width: 16px;
             height: 16px;
             margin-right: 5px;
         }
         
-        /* Additional styles for the expand icon to work with the new button */
-        .expand-icon {
-            /* Existing styles */
-            margin-left: 0; /* Remove auto margin since we're using flexbox spacing */
-        }
-
         /* Add space to separate buttons from filter buttons */
         .button-group {
             margin-left: auto;
@@ -906,7 +998,7 @@ Function Generate-EntraAuthReport {
             </div>
             <div class="report-info">
                 <div class="report-date">Generated: $(Get-Date -Format "MMMM d, yyyy")</div>
-                <div class="tenant">Org: $organisationName</div>
+                <div class="tenant">Org: $($organisationName)</div>
             </div>
         </div>
     </div>
@@ -916,7 +1008,7 @@ Function Generate-EntraAuthReport {
             <div class="progress-title">Progress Towards Passwordless Authentication</div>
             <div class="progress-bar-container">
                 <div class="progress-bar" style="width: $($passwordlessCapablePercentage)%"></div>
-                <div class="progress-text">$passwordlessCapablePercentage% Complete</div>
+                <div class="progress-text">$($passwordlessCapablePercentage)% Complete</div>
             </div>
             <div class="progress-info">
                 <span>0%</span>
@@ -924,11 +1016,11 @@ Function Generate-EntraAuthReport {
                 <span>100%</span>
             </div>
             <div class="progress-legend">
-                <div class="legend-item">
+                <div class="legend-item" id="legend-item-passwordless-capable">
                     <div class="legend-color" style="background-color: #57A773;"></div>
-                    <span>$totalPasswordlessUsersCount users passwordless capable</span>
+                    <span>$($totalPasswordlessUsersCount) users passwordless capable</span>
                 </div>
-                <div class="legend-item">
+                <div class="legend-item" id="legend-item-not-passwordless-capable">
                     <div class="legend-color" style="background-color: #e0e0e0;"></div>
                     <span>$($totalUsersCount - $totalPasswordlessUsersCount) users still need passwordless capability</span>
                 </div>
@@ -936,40 +1028,40 @@ Function Generate-EntraAuthReport {
         </div>
 
         <div class="summary-stats">
-            <div class="stat-card">
+            <div class="stat-card" id="stat-card-total">
                 <div class="stat-title">Total Users</div>
-                <div class="stat-value">$totalUsersCount</div>
+                <div class="stat-value">$($totalUsersCount)</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card" id="stat-card-mfa-capable">
                 <div class="stat-title">MFA Capable Users</div>
-                <div class="stat-value">$totalMFACapableUsersCount</div>
-                <div class="stat-percentage">$MfaCapablePercentage% of users</div>
+                <div class="stat-value">$($totalMFACapableUsersCount)</div>
+                <div class="stat-percentage">$($MfaCapablePercentage)% of users</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card" id="stat-card-strong-methods">
                 <div class="stat-title">Strong Auth Methods</div>
-                <div class="stat-value">$totalStrongAuthUsersCount</div>
-                <div class="stat-percentage">$strongAuthPercentage% of users</div>
+                <div class="stat-value">$($totalStrongAuthUsersCount)</div>
+                <div class="stat-percentage">$($strongAuthPercentage)% of users</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card" id="stat-card-passwordless-capable">
                 <div class="stat-title">Passwordless Capable</div>
-                <div class="stat-value">$totalPasswordlessUsersCount</div>
-                <div class="stat-percentage">$passwordlessCapablePercentage% of users</div>
+                <div class="stat-value">$($totalPasswordlessUsersCount)</div>
+                <div class="stat-percentage">$($passwordlessCapablePercentage)% of users</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card" id="stat-card-mixed-methods">
                 <div class="stat-title">Strong + Weak Auth</div>
-                <div class="stat-value">$totalBothMethodTypesCount</div>
-                <div class="stat-percentage">$bothMethodsPercentage% of users</div>
+                <div class="stat-value">$($totalBothMethodTypesCount)</div>
+                <div class="stat-percentage">$($bothMethodsPercentage)% of users</div>
             </div>
         </div>
 
         <div class="search-container">
-            <input type="text" id="searchBox" placeholder="Search for a user..." onkeyup="searchTable()">
+            <input type="text" id="searchBox" placeholder="Search for a user...">
         </div>
         
         <div class="switches-group">
             <div class="switch-container">
                 <label class="switch">
-                    <input type="checkbox" id="hideDisabledSwitch" onchange="toggleDisabledMethods()">
+                    <input type="checkbox" id="hideDisabledSwitch">
                     <span class="slider"></span>
                 </label>
                 <span class="switch-label">Hide Disabled Authentication Methods</span>
@@ -977,7 +1069,7 @@ Function Generate-EntraAuthReport {
             
             <div class="switch-container">
                 <label class="switch">
-                    <input type="checkbox" id="hideMfaCapableSwitch" onchange="toggleMfaCapableUsers()">
+                    <input type="checkbox" class="filter-switch" id="hideMfaCapableSwitch">
                     <span class="slider"></span>
                 </label>
                 <span class="switch-label">Hide MFA Capable Users</span>
@@ -985,7 +1077,7 @@ Function Generate-EntraAuthReport {
             
             <div class="switch-container">
                 <label class="switch">
-                    <input type="checkbox" id="hideETXUsersSwitch" onchange="toggleETXUsers()">
+                    <input type="checkbox" class="filter-switch" id="hideExternalUsersSwitch">
                     <span class="slider"></span>
                 </label>
                 <span class="switch-label">Hide External Users</span>
@@ -993,7 +1085,7 @@ Function Generate-EntraAuthReport {
             
             <div class="switch-container">
                 <label class="switch">
-                    <input type="checkbox" id="hideSyncUsersSwitch" onchange="toggleSyncUsers()">
+                    <input type="checkbox" class="filter-switch" id="hideSyncUsersSwitch">
                     <span class="slider"></span>
                 </label>
                 <span class="switch-label">Hide Sync_ Account</span>
@@ -1001,14 +1093,14 @@ Function Generate-EntraAuthReport {
         </div>
         
         <div class="filter-container">
-            <button class="filter-button active" onclick="filterTable('all')">All Users</button>
-            <button class="filter-button" onclick="filterTable('privileged')">Privileged Users</button>
-            <button class="filter-button" onclick="filterTable('passwordless')">Passwordless Capable</button>
-            <button class="filter-button" onclick="filterTable('strong')">Strong Methods</button>
-            <button class="filter-button" onclick="filterTable('mixed')">Strong+Weak Methods</button>
-            <button class="filter-button" onclick="filterTable('weak')">Weak Methods Only</button>
+            <button class="filter-button active" data-filter="all">All Users</button>
+            <button class="filter-button" data-filter="privileged">Privileged Users</button>
+            <button class="filter-button" data-filter="passwordless">Passwordless Capable</button>
+            <button class="filter-button" data-filter="strong">Strong Methods</button>
+            <button class="filter-button" data-filter="mixed">Strong+Weak Methods</button>
+            <button class="filter-button" data-filter="weak">Weak Methods Only</button>
             <div class="button-group">
-                <button class="export-csv-button" onclick="exportTableToCSV()" title="Export table to CSV file">
+                <button id="export-csv-button" title="Export table to CSV file">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path>
                         <polyline points="7 10 12 15 17 10"></polyline>
@@ -1016,7 +1108,7 @@ Function Generate-EntraAuthReport {
                     </svg>
                     Export CSV
                 </button>
-                <button class="expand-icon" onclick="openFullscreenTable()" title="Expand table to full screen">
+                <button id="expand-button" title="Expand table to full screen">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
                     </svg>
@@ -1033,115 +1125,41 @@ Function Generate-EntraAuthReport {
                         <th style="width: 7%;">Default Method</th>
                         <th style="width: 5%;">MFA</th>
                         <th style="width: 5%;">Pless</th>
-"@)
-
-    # Add column for each method type
-    foreach ($method in $MethodTypes) {
-        $cssClass = if ($method.Strength -eq "Strong") { "strong-method" } else { "weak-method" }
+                        $($authMethodsHeaders)
+                    </tr>
+                </thead>
+                <tbody id="virtual-tbody"></tbody>
+            </table>
+        </div>
         
-        # Check if this method is disabled by policy
-        $isDisabled = $MethodsDisabledByPolicy.Name -contains $method.Name
-        
-        if ($isDisabled) {
-            [void]$html.AppendLine("                    <th class=`"$cssClass diagonal-header`" data-disabled=`"true`"><div>$($method.Name)</div></th>`n")
-        }
-        else {
-            [void]$html.AppendLine("                    <th class=`"$cssClass diagonal-header`" ><div>$($method.Name)</div></th>`n")
-        }
-    }
-
-    [void]$html.AppendLine(@"
-                </tr>
-            </thead>
-            <tbody>
-"@)
-
-    # Add a row for each user
-    for ($i = 0; $i -lt $UserRegistrations.Count; $i++) {
-        $user = $UserRegistrations[$i]
-    
-        $userMethods = $user.methodsRegistered
-        $userHasStrong = $false
-        $userHasWeak = $false
-        $isPrivileged = $false
-        $isSyncUser = $false
-        
-        # Check if user has strong or weak methods
-        foreach ($method in $userMethods) {
-            if ($strongMethodTypes -contains $method) {
-                $userHasStrong = $true
-            }
-            if ($weakMethodTypes.type -contains $method) {
-                $userHasWeak = $true
-            }
-        }
-        
-        # Check if user is privileged
-        if ($PrivilegedUsersRegistrationDetails.userPrincipalName -contains $user.userPrincipalName) {
-            $isPrivileged = $true
-        }
-
-        # Check if user is a sync user
-        if (($user.userPrincipalName -like "Sync_*") -or ($user.userPrincipalName -like "ADToAADSyncServiceAccount*")) {
-            $isSyncUser = $true
-        }
-        
-        # Set data attribute for filtering
-        $dataAttributes = ""
-        if ($userHasStrong) { $dataAttributes += "data-hasstrong='true' " }
-        if ($userHasWeak -and -not $userHasStrong) { $dataAttributes += "data-weakonly='true' " }
-        if ($userHasStrong -and $userHasWeak) { $dataAttributes += "data-mixed='true' " }
-        if ($user.isPasswordlessCapable) { $dataAttributes += "data-passwordless='true' " }
-        if ($user.isMfaCapable) { $dataAttributes += "data-mfacapable='true' " }
-        if ($user.userPrincipalName -like "*#EXT#*") { $dataAttributes += "data-externaluser='true' " }
-        if ($isPrivileged) { $dataAttributes += "data-privileged='true' " }
-        if ($isSyncUser) { $dataAttributes += "data-syncuser='true' " }
-        
-        [void]$html.AppendLine("                <tr $dataAttributes>`n")
-        [void]$html.AppendLine("                    <td>$($user.userPrincipalName)</td>`n")
-        [void]$html.AppendLine("                    <td>$($user.defaultmfaMethod)</td>`n")
-        [void]$html.AppendLine("                    <td>$(if($user.isMfaCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n")
-        [void]$html.AppendLine("                    <td>$(if($user.isPasswordlessCapable) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n")
-        
-        # Add column for each method type - check if registered
-        foreach ($method in $MethodTypes) {
-            $isRegistered = $userMethods -contains $method.type
-            [void]$html.AppendLine("                    <td>$(if($isRegistered) {"<span class='checkmark'>✓</span>"} else {"<span class='x-mark'>✗</span>"})</td>`n")
-        }
-        
-        [void]$html.AppendLine("                </tr>`n")
-    }
-
-    [void]$html.AppendLine(@"
-            </tbody>
-        </table>
-    </div>
-        
-    <!-- Modal for fullscreen table -->
-    <div id="tableModal" class="modal">
-        <div class="modal-content">
-            <span class="close-modal" onclick="closeFullscreenTable()">&times;</span>
-            <h2>Authentication Methods - Expanded View</h2>
-            <div class="fullscreen-table-container">
-                <!-- The table will be cloned here via JavaScript -->
+        <!-- Modal for fullscreen table -->
+        <div id="tableModal" class="modal">
+            <div class="modal-content">
+                <span id="close-modal-button">&times;</span>
+                <h2>Authentication Methods - Expanded View</h2>
+                <div class="fullscreen-table-container">
+                    <!-- The table will be cloned here via JavaScript -->
+                </div>
             </div>
+        </div>
+
+        <div class="footer">
+            <p>Authentication Methods report generated via Microsoft Graph API | $($organisationName)</p>
         </div>
     </div>
 
-    <div class="footer">
-        <p>Authentication Methods report generated via Microsoft Graph API | $organisationName</p>
-    </div>
-
     <script>
-        // Initialize counters for dynamic updates
-        let totalUsers = $totalUsersCount;
-        let mfaCapableUsers = $totalMFACapableUsersCount;
-        let strongAuthUsers = $totalStrongAuthUsersCount;
-        let passwordlessUsers = $totalPasswordlessUsersCount;
-        let mixedAuthUsers = $totalBothMethodTypesCount;
+        const usersData = $($userRegistrationsJson);
+        const authMethods = $($methodTypesJson);
+
+        const totalUsers = $($totalUsersCount);
+        const mfaCapableUsers = $($totalMFACapableUsersCount);
+        const strongAuthUsers = $($totalStrongAuthUsersCount);
+        const passwordlessUsers = $($totalPasswordlessUsersCount);
+        const mixedAuthUsers = $($totalBothMethodTypesCount);
         
-        // Store external user counts for recalculation
-        let externalUserCounts = {
+        /* Store external user counts for recalculation */
+        const externalUserCounts = {
             total: 0,
             mfaCapable: 0,
             strongAuth: 0,
@@ -1149,378 +1167,417 @@ Function Generate-EntraAuthReport {
             mixedAuth: 0
         };
         
-        // Store sync user counts for recalculation
-        let syncUserCounts = {
+        /* Store sync user counts for recalculation */
+        const syncUserCounts = {
             total: 0,
             mfaCapable: 0,
             strongAuth: 0,
             passwordless: 0,
             mixedAuth: 0
         };
-        
-        // After page loads, count external users
+
+        /* Calculate external and sync users counters */
+        for (let i = 0; i < usersData.length; i++) {
+            if (usersData[i].isExternal) {
+                externalUserCounts.total++;
+                if(usersData[i].isMfaCapable) externalUserCounts.mfaCapable++;
+                if(usersData[i].hasStrongMethods) externalUserCounts.strongAuth++;
+                if(usersData[i].isPasswordlessCapable) externalUserCounts.passwordless++;
+                if(usersData[i].hasStrongMethods && usersData[i].hasWeakMethods) externalUserCounts.mixedAuth++;
+            }
+
+            if (usersData[i].isSync) {
+                syncUserCounts.total++;
+                if(usersData[i].isMfaCapable) syncUserCounts.mfaCapable++;
+                if(usersData[i].hasStrongMethods) syncUserCounts.strongAuth++;
+                if(usersData[i].isPasswordlessCapable) syncUserCounts.passwordless++;
+                if(usersData[i].hasStrongMethods && usersData[i].hasWeakMethods) syncUserCounts.mixedAuth++;
+            }
+        }
+
+        class VirtualTable {
+            constructor(options) {
+                this.container = options.container;
+                this.paginationContainers = [
+                    document.createElement('div'),
+                    document.createElement('div'),
+                ];
+                this.container.prepend(this.paginationContainers[0]);
+                this.container.append(this.paginationContainers[1]);
+                this.data = options.data || [];
+                this.tbody = options.tbody;
+                this.renderFunction = options.renderRow || this.defaultRenderRow;
+                
+                this.rowsPerPage = 100;
+                this.currentPage = 1;
+
+                this.render();
+                this.renderPagination();
+            }
+
+            render() {
+                const startIndex = (this.currentPage - 1) * this.rowsPerPage;
+                const endIndex = startIndex + this.rowsPerPage;
+
+                this.tbody.innerHTML = '';
+
+                for (let i = Math.max(0, startIndex); i < Math.min(this.data.length, endIndex); i++) {
+                    const row = this.renderFunction(this.data[i], i);
+                    this.tbody.appendChild(row);
+                }
+            }
+
+            renderPagination() {
+                this.paginationContainers.forEach(c => {
+                    c.innerHTML = '';
+                    c.className = 'pagination-container';
+                
+                    const pageSelector = document.createElement('input');
+                    pageSelector.className = 'page-selector-input';
+                    pageSelector.setAttribute('type', 'number');
+                    pageSelector.setAttribute('min', 1);
+                    pageSelector.setAttribute('max', this.getPageCount());
+                    pageSelector.value = this.currentPage;
+                    pageSelector.addEventListener('input', e => this.updatePage(e.target.value));
+                    
+                    const pageSelectorDiv = document.createElement('div');
+                    pageSelectorDiv.appendChild(pageSelector);
+
+                    const pageLabel = document.createElement('div');
+                    pageLabel.textContent = 'Page';
+
+                    const totalLabel = document.createElement('div');
+                    totalLabel.textContent = 'of ' + this.getPageCount();
+
+                    c.appendChild(pageLabel);
+                    c.appendChild(pageSelectorDiv);
+                    c.appendChild(totalLabel);
+                });
+            }
+
+            defaultRenderRow(rowData, index) {
+                const tr = document.createElement('tr');
+                tr.dataset.index = index;
+
+                /* Create cells based on rowData properties */
+                Object.values(rowData).forEach(value => {
+                    const td = document.createElement('td');
+                    td.textContent = value;
+                    tr.appendChild(td);
+                });
+
+                return tr;
+            }
+
+            updateData(newData) {
+                this.data = newData;
+                this.currentPage = 1;
+                this.render();
+                this.renderPagination();
+            }
+
+            updatePage(newPage) {
+                if (newPage <= 0) return;
+                if (newPage > this.getPageCount()) return;
+
+                document.querySelectorAll('.page-selector-input').forEach(el => {
+                    el.value = newPage;
+                });
+
+                this.currentPage = newPage;
+                this.render();
+            }
+
+            getPageCount() {
+                return Math.ceil((this.data.length - 1) / this.rowsPerPage); 
+            }
+        };
+
+        /* After page loads, initialize virtual table */
         document.addEventListener('DOMContentLoaded', function() {
-            const table = document.getElementById('authMethodsTable');
-            const rows = table.getElementsByTagName('tr');
-            
-            for (let i = 1; i < rows.length; i++) {
-                const row = rows[i];
-                if (row.hasAttribute('data-externaluser')) {
-                    externalUserCounts.total++;
-                    if (row.hasAttribute('data-mfacapable')) externalUserCounts.mfaCapable++;
-                    if (row.hasAttribute('data-hasstrong')) externalUserCounts.strongAuth++;
-                    if (row.hasAttribute('data-passwordless')) externalUserCounts.passwordless++;
-                    if (row.hasAttribute('data-mixed')) externalUserCounts.mixedAuth++;
-                }
-                
-                if (row.hasAttribute('data-syncuser')) {
-                    syncUserCounts.total++;
-                    if (row.hasAttribute('data-mfacapable')) syncUserCounts.mfaCapable++;
-                    if (row.hasAttribute('data-hasstrong')) syncUserCounts.strongAuth++;
-                    if (row.hasAttribute('data-passwordless')) syncUserCounts.passwordless++;
-                    if (row.hasAttribute('data-mixed')) syncUserCounts.mixedAuth++;
-                }
-            }
-        });
-        
-        // Update all summary cards and progress bar
-        function updateSummaryStats(hideExternal, hideSync) {
-            // Calculate adjusted counts
-            let adjustedTotal = totalUsers;
-            let adjustedMfa = mfaCapableUsers;
-            let adjustedStrong = strongAuthUsers;
-            let adjustedPasswordless = passwordlessUsers;
-            let adjustedMixed = mixedAuthUsers;
-            
-            // Subtract external users if they're hidden
-            if (hideExternal) {
-                adjustedTotal -= externalUserCounts.total;
-                adjustedMfa -= externalUserCounts.mfaCapable;
-                adjustedStrong -= externalUserCounts.strongAuth;
-                adjustedPasswordless -= externalUserCounts.passwordless;
-                adjustedMixed -= externalUserCounts.mixedAuth;
-            }
-            
-            // Subtract sync users if they're hidden
-            if (hideSync) {
-                adjustedTotal -= syncUserCounts.total;
-                adjustedMfa -= syncUserCounts.mfaCapable;
-                adjustedStrong -= syncUserCounts.strongAuth;
-                adjustedPasswordless -= syncUserCounts.passwordless;
-                adjustedMixed -= syncUserCounts.mixedAuth;
-            }
-            
-            // Calculate percentages
-            const mfaPercentage = adjustedTotal > 0 ? Math.round((adjustedMfa / adjustedTotal) * 100 * 100) / 100 : 0;
-            const strongPercentage = adjustedTotal > 0 ? Math.round((adjustedStrong / adjustedTotal) * 100 * 100) / 100 : 0;
-            const passwordlessPercentage = adjustedTotal > 0 ? Math.round((adjustedPasswordless / adjustedTotal) * 100 * 100) / 100 : 0;
-            const mixedPercentage = adjustedTotal > 0 ? Math.round((adjustedMixed / adjustedTotal) * 100 * 100) / 100 : 0;
-            
-            // Update summary cards
-            document.querySelector('.stat-card:nth-child(1) .stat-value').textContent = adjustedTotal;
-            
-            document.querySelector('.stat-card:nth-child(2) .stat-value').textContent = adjustedMfa;
-            document.querySelector('.stat-card:nth-child(2) .stat-percentage').textContent = mfaPercentage + '% of users';
-            
-            document.querySelector('.stat-card:nth-child(3) .stat-value').textContent = adjustedStrong;
-            document.querySelector('.stat-card:nth-child(3) .stat-percentage').textContent = strongPercentage + '% of users';
-            
-            document.querySelector('.stat-card:nth-child(4) .stat-value').textContent = adjustedPasswordless;
-            document.querySelector('.stat-card:nth-child(4) .stat-percentage').textContent = passwordlessPercentage + '% of users';
-            
-            document.querySelector('.stat-card:nth-child(5) .stat-value').textContent = adjustedMixed;
-            document.querySelector('.stat-card:nth-child(5) .stat-percentage').textContent = mixedPercentage + '% of users';
-            
-            // Update progress bar
-            const progressBar = document.querySelector('.progress-bar');
-            const progressText = document.querySelector('.progress-text');
-            const passwordlessLegend = document.querySelector('.legend-item:first-child span');
-            const nonPasswordlessLegend = document.querySelector('.legend-item:last-child span');
-            
-            progressBar.style.width = passwordlessPercentage + '%';
-            progressText.textContent = passwordlessPercentage + '% Complete';
-            passwordlessLegend.textContent = adjustedPasswordless + ' users passwordless capable';
-            nonPasswordlessLegend.textContent = (adjustedTotal - adjustedPasswordless) + ' users still need passwordless capability';
-        }
+            const hiddenColumnIndices = [];
+            const virtualTable = new VirtualTable({
+                container: document.querySelector('.table-container'),
+                tbody: document.getElementById('virtual-tbody'),
+                data: usersData,
+                renderRow: (rowData, index) => {
+                    const tr = document.createElement('tr');
+                    const trCols = [];
 
-        function searchTable() {
-            const input = document.getElementById('searchBox');
-            const filter = input.value.toUpperCase();
-            const table = document.getElementById('authMethodsTable');
-            const rows = table.getElementsByTagName('tr');
-            
-            for (let i = 1; i < rows.length; i++) {
-                const firstCol = rows[i].getElementsByTagName('td')[0];
-                if (firstCol) {
-                    const txtValue = firstCol.textContent || firstCol.innerText;
-                    if (txtValue.toUpperCase().indexOf(filter) > -1) {
-                        rows[i].style.display = '';
-                    } else {
-                        rows[i].style.display = 'none';
+                    trCols.push($($backtick)<td title=`"`${rowData.userPrincipalName}`">`${rowData.userPrincipalName}</td>$($backtick));
+                    trCols.push($($backtick)<td title=`"`${rowData.defaultMfaMethod}`">`${rowData.defaultMfaMethod}</td>$($backtick));
+                    trCols.push($($backtick)<td>`${rowData.isMfaCapable ? "<span class='checkmark'>✓</span>" : "<span class='x-mark'>✗</span>"}</td>$($backtick));
+                    trCols.push($($backtick)<td>`${rowData.isPasswordlessCapable ? "<span class='checkmark'>✓</span>" : "<span class='x-mark'>✗</span>" }</td>$($backtick));
+
+                    authMethods.forEach(m => {
+                        trCols.push($($backtick)<td>`${ rowData.methodsRegistered.includes(m) ? "<span class='checkmark'>✓</span>" : "<span class='x-mark'>✗</span>" }</td>$($backtick));
+                    });
+
+                    tr.innerHTML = trCols.filter((c, i) => !hiddenColumnIndices.includes(i)).join('');
+                    return tr;
+                }
+            });
+
+            /* Handle export table data to CSV button */
+            document.getElementById('export-csv-button').addEventListener('click', function() {
+                /* Create a simple CSV string with proper formatting */
+                const csvContent = [];
+
+                /* Get the table and header cells */
+                const table = document.getElementById('authMethodsTable');
+                const headerRow = table.querySelector('thead tr');
+                const headerCells = headerRow.querySelectorAll('th');
+
+                /* Create header row for CSV */
+                const headerCsvRow = [];
+                for (let i = 0; i < headerCells.length; i++) {
+                    if (headerCells[i].style.display !== 'none') {
+                        const cellText = headerCells[i].textContent.trim();
+                        headerCsvRow.push(sanitizeCsvString(cellText));
                     }
                 }
-            }
-        }
-        
-        function filterTable(filterType) {
-            const buttons = document.querySelectorAll('.filter-button');
-            buttons.forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
-            
-            const table = document.getElementById('authMethodsTable');
-            const rows = table.getElementsByTagName('tr');
-            
-            for (let i = 1; i < rows.length; i++) {
-                const row = rows[i];
-                
-                if (filterType === 'all') {
-                    row.style.display = '';
-                } else if (filterType === 'strong' && row.hasAttribute('data-hasstrong')) {
-                    row.style.display = '';
-                } else if (filterType === 'weak' && row.hasAttribute('data-weakonly')) {
-                    row.style.display = '';
-                } else if (filterType === 'passwordless' && row.hasAttribute('data-passwordless')) {
-                    row.style.display = '';
-                } else if (filterType === 'mixed' && row.hasAttribute('data-mixed')) {
-                    row.style.display = '';
-                } else if (filterType === 'privileged' && row.hasAttribute('data-privileged')) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
+
+                /* define extra columns to apply filters in the spreadsheet */ 
+                headerCsvRow.push('MFA capable');
+                headerCsvRow.push('External user');
+                headerCsvRow.push('Sync user');
+                headerCsvRow.push('Strong methods');
+                headerCsvRow.push('Only weak methods');
+                headerCsvRow.push('Mixed methods');
+                headerCsvRow.push('Privileged');
+
+                csvContent.push(headerCsvRow.join(','));
+
+                for (let i = 0; i < virtualTable.data.length; i++) {
+                    const csvRow = [];
+                    const rowData = virtualTable.data[i];
+
+                    csvRow.push(sanitizeCsvString(rowData.userPrincipalName));
+                    csvRow.push(sanitizeCsvString(rowData.defaultMfaMethod));
+                    csvRow.push(rowData.isMfaCapable ? 'Yes' : 'No');
+                    csvRow.push(rowData.isPasswordlessCapable ? 'Yes' : 'No');
+                    authMethods.forEach(m => {
+                        csvRow.push(rowData.methodsRegistered.includes(m) ? 'Yes' : 'No');
+                    });
+
+                    /* fill the extra columns */ 
+                    csvRow.push(rowData.isMfaCapable ? 'Yes' : 'No');
+                    csvRow.push(rowData.isExternal ? 'Yes' : 'No');
+                    csvRow.push(rowData.isSync ? 'Yes' : 'No');
+                    csvRow.push(rowData.hasStrongMethods ? 'Yes' : 'No');
+                    csvRow.push(rowData.hasWeakMethods && !rowData.hasStrongMethods ? 'Yes' : 'No');
+                    csvRow.push(rowData.hasWeakMethods && rowData.hasStrongMethods ? 'Yes' : 'No');
+                    csvRow.push(rowData.isPrivileged ? 'Yes' : 'No');
+
+                    csvContent.push(csvRow.filter((c, i) => !hiddenColumnIndices.includes(i)).join(','));
                 }
-            }
-        }
-        
-        function toggleDisabledMethods() {
-            const switchElem = document.getElementById('hideDisabledSwitch');
-            const isHiding = switchElem.checked;
-            
-            // Get all table headers and find disabled ones
-            const table = document.getElementById('authMethodsTable');
-            const headers = table.getElementsByTagName('th');
-            
-            // Loop through all headers to find disabled methods
-            for (let i = 0; i < headers.length; i++) {
-                if (headers[i].hasAttribute('data-disabled')) {
-                    // Hide/show the header
-                    headers[i].style.display = isHiding ? 'none' : '';
-                    
-                    // Hide/show the corresponding cell in each row
-                    const rows = table.getElementsByTagName('tr');
-                    for (let j = 1; j < rows.length; j++) {
-                        const cells = rows[j].getElementsByTagName('td');
-                        if (i < cells.length) {
-                            cells[i].style.display = isHiding ? 'none' : '';
+
+                /* Join all rows with proper newlines */
+                const csvString = csvContent.join('\r\n');
+
+                /* Get date for filename */
+                const today = new Date();
+                /* YYYY-MM-DD format */
+                const date = today.toISOString().split('T')[0];
+
+                /* Create download link with data URI */
+                const downloadLink = document.createElement('a');
+
+                /* Add BOM for proper UTF-8 encoding in Excel */
+                const BOM = '\uFEFF';
+                const encodedUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(BOM + csvString);
+
+                downloadLink.setAttribute('href', encodedUri);
+                downloadLink.setAttribute('download', 'Entra_Auth_Methods_Report_' + date + '.csv');
+                document.body.appendChild(downloadLink);
+
+                /* Trigger download and remove link */
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+            });
+
+            /* Handle expand fullscreen button */
+            document.getElementById('expand-button').addEventListener('click', function() {
+                const modal = document.getElementById('tableModal');
+                const originalTable = document.getElementById('authMethodsTable');
+                const fullscreenContainer = document.querySelector('.fullscreen-table-container');
+
+                /* Clone the table for the modal */
+                const clonedTable = originalTable.cloneNode(true);
+                clonedTable.id = 'fullscreenTable';
+
+                /* Clear previous content and add the cloned table */
+                fullscreenContainer.innerHTML = '';
+                fullscreenContainer.appendChild(clonedTable);
+
+                /* Show the modal */
+                modal.style.display = 'block';
+                document.body.classList.add('modal-open');
+            });
+
+            /* Handle close fullscreen modal */
+            document.getElementById('close-modal-button').addEventListener('click', function() {
+                const modal = document.getElementById('tableModal');
+                modal.style.display = 'none';
+                document.body.classList.remove('modal-open');
+            });
+
+            /* Handle search filter */
+            document.getElementById('searchBox').addEventListener('keyup', () => filterTable());
+
+            /* Handle disabled auth methods switch */
+            document.getElementById('hideDisabledSwitch').addEventListener('change', function() {
+                const isHiding = this.checked;
+
+                /* Get all table headers and find disabled ones */
+                const table = document.getElementById('authMethodsTable');
+                const headers = table.getElementsByTagName('th');
+
+                hiddenColumnIndices.length = 0;
+
+                /* Loop through all headers to find disabled methods */
+                for (let i = 0; i < headers.length; i++) {
+                    if (headers[i].hasAttribute('data-disabled')) {
+                        headers[i].style.display = '';
+                        /* Hide/show the header */
+                        if (isHiding) {
+                            headers[i].style.display = 'none';
+                            hiddenColumnIndices.push(i);
                         }
                     }
                 }
-            }
-        }
-        
-        function toggleMfaCapableUsers() {
-            const switchElem = document.getElementById('hideMfaCapableSwitch');
-            const isHiding = switchElem.checked;
-            
-            // Get all table rows
-            const table = document.getElementById('authMethodsTable');
-            const rows = table.getElementsByTagName('tr');
-            
-            // Skip header row (i=0) and process all data rows
-            for (let i = 1; i < rows.length; i++) {
-                if (rows[i].hasAttribute('data-mfacapable')) {
-                    rows[i].style.display = isHiding ? 'none' : '';
-                }
-            }
-        }
-        
-        function toggleETXUsers() {
-            const switchElem = document.getElementById('hideETXUsersSwitch');
-            const isHiding = switchElem.checked;
-            const syncUserElem = document.getElementById('hideSyncUsersSwitch');
-            const hidingSync = syncUserElem ? syncUserElem.checked : false;
-            
-            // Get all table rows
-            const table = document.getElementById('authMethodsTable');
-            const rows = table.getElementsByTagName('tr');
-            
-            // Skip header row (i=0) and process all data rows
-            for (let i = 1; i < rows.length; i++) {
-                if (rows[i].hasAttribute('data-externaluser')) {
-                    rows[i].style.display = isHiding ? 'none' : '';
-                }
-            }
-            
-            // Update the summary cards and progress bar
-            updateSummaryStats(isHiding, hidingSync);
-        }
-        
-        function toggleSyncUsers() {
-            const switchElem = document.getElementById('hideSyncUsersSwitch');
-            const isHiding = switchElem.checked;
-            const extUserElem = document.getElementById('hideETXUsersSwitch');
-            const hidingExt = extUserElem ? extUserElem.checked : false;
-            
-            // Get all table rows
-            const table = document.getElementById('authMethodsTable');
-            const rows = table.getElementsByTagName('tr');
-            
-            // Skip header row (i=0) and process all data rows
-            for (let i = 1; i < rows.length; i++) {
-                if (rows[i].hasAttribute('data-syncuser')) {
-                    rows[i].style.display = isHiding ? 'none' : '';
-                }
-            }
-            
-            // Update the summary cards and progress bar
-            updateSummaryStats(hidingExt, isHiding);
-        }
-        
-        // Functions for fullscreen table view
-        function openFullscreenTable() {
-            const modal = document.getElementById('tableModal');
-            const originalTable = document.getElementById('authMethodsTable');
-            const fullscreenContainer = document.querySelector('.fullscreen-table-container');
-            
-            // Clone the table for the modal
-            const clonedTable = originalTable.cloneNode(true);
-            clonedTable.id = 'fullscreenTable';
-            
-            // Clear previous content and add the cloned table
-            fullscreenContainer.innerHTML = '';
-            fullscreenContainer.appendChild(clonedTable);
-            
-            // Show the modal
-            modal.style.display = 'block';
-            document.body.classList.add('modal-open');
-            
-            // Apply any active filters to the cloned table
-            applyActiveFiltersToFullscreenTable();
-        }
-        
-        function closeFullscreenTable() {
-            const modal = document.getElementById('tableModal');
-            modal.style.display = 'none';
-            document.body.classList.remove('modal-open');
-        }
-        
-        function applyActiveFiltersToFullscreenTable() {
-            // Get all visible/hidden rows from the original table
-            const originalTable = document.getElementById('authMethodsTable');
-            const fullscreenTable = document.getElementById('fullscreenTable');
-            
-            if (!originalTable || !fullscreenTable) return;
-            
-            const originalRows = originalTable.getElementsByTagName('tr');
-            const fullscreenRows = fullscreenTable.getElementsByTagName('tr');
-            
-            // Skip header row (i=0) and apply the same visibility to each row
-            for (let i = 1; i < originalRows.length && i < fullscreenRows.length; i++) {
-                fullscreenRows[i].style.display = originalRows[i].style.display;
-            }
-            
-            // Apply the same column visibility for methods that might be hidden
-            const originalHeaders = originalTable.querySelectorAll('th');
-            const fullscreenHeaders = fullscreenTable.querySelectorAll('th');
-            
-            for (let i = 0; i < originalHeaders.length && i < fullscreenHeaders.length; i++) {
-                if (originalHeaders[i].style.display === 'none') {
-                    fullscreenHeaders[i].style.display = 'none';
-                    
-                    // Hide corresponding cells in each row
-                    for (let j = 1; j < fullscreenRows.length; j++) {
-                        const cells = fullscreenRows[j].getElementsByTagName('td');
-                        if (i < cells.length) {
-                            cells[i].style.display = 'none';
-                        }
+
+                virtualTable.render();
+            });
+
+            /* Handle switch filters */
+            document.querySelectorAll('.filter-switch').forEach(el => {
+                el.addEventListener('change', () => filterTable());
+            });
+
+            /* Handle button filters */
+            document.querySelectorAll('.filter-button').forEach(el => {
+                el.addEventListener('click', function() {
+                    const buttons = document.querySelectorAll('.filter-button');
+                    buttons.forEach(btn => btn.classList.remove('active'));
+                    this.classList.add('active');
+                    filterTable();
+                });
+            });
+
+            function filterTable() {
+                const searchTerm = document.getElementById('searchBox').value.toUpperCase() ?? '';
+                const isHidingMfaCapableUsers = document.getElementById('hideMfaCapableSwitch').checked;
+                const isHidingExternalUsers = document.getElementById('hideExternalUsersSwitch').checked;
+                const isHidingSyncUsers = document.getElementById('hideSyncUsersSwitch').checked;
+                const buttonFilterValue = document.querySelector('.filter-button.active').getAttribute('data-filter');
+
+                const filteredData = usersData.filter(r => {
+                    if (searchTerm !== '' && r.userPrincipalName.toUpperCase().indexOf(searchTerm) === -1) {
+                        return false;
                     }
+
+                    if (isHidingMfaCapableUsers && r.isMfaCapable) {
+                        return false;
+                    }
+
+                    if (isHidingExternalUsers && r.isExternal) {
+                        return false;
+                    }
+
+                    if (isHidingSyncUsers && r.isSync) {
+                        return false;
+                    }
+
+                    switch (buttonFilterValue) {
+                        case 'strong':
+                            if (!r.hasStrongMethods) return false;
+                            break;
+                        case 'weak':
+                            if (!r.hasWeakMethods || r.hasStrongMethods) return false;
+                            break;
+                        case 'passwordless':
+                            if (!r.isPasswordlessCapable) return false;
+                            break;
+                        case 'mixed':
+                            if (!r.hasWeakMethods || !r.hasStrongMethods) return false;
+                            break;
+                        case 'privileged':
+                            if (!r.isPrivileged) return false;
+                            break;
+                    }
+
+                    return true;
+                });
+
+                virtualTable.updateData(filteredData);
+                updateSummaryStats(isHidingExternalUsers, isHidingSyncUsers);
+            }
+
+            /* Update all summary cards and progress bar */
+            function updateSummaryStats(hideExternal, hideSync) {
+                /* Calculate adjusted counts */
+                let adjustedTotal = totalUsers;
+                let adjustedMfa = mfaCapableUsers;
+                let adjustedStrong = strongAuthUsers;
+                let adjustedPasswordless = passwordlessUsers;
+                let adjustedMixed = mixedAuthUsers;
+
+                /* Subtract external users if they're hidden */
+                if (hideExternal) {
+                    adjustedTotal -= externalUserCounts.total;
+                    adjustedMfa -= externalUserCounts.mfaCapable;
+                    adjustedStrong -= externalUserCounts.strongAuth;
+                    adjustedPasswordless -= externalUserCounts.passwordless;
+                    adjustedMixed -= externalUserCounts.mixedAuth;
                 }
-            }
-        }
-        
-        // Close modal when clicking outside of it
-        window.onclick = function(event) {
-            const modal = document.getElementById('tableModal');
-            if (event.target === modal) {
-                closeFullscreenTable();
-            }
-        }
-        
-        // Add event listener to close with Escape key
-        document.addEventListener('keydown', function(event) {
-            if (event.key === 'Escape' || event.keyCode === 27) {
-                closeFullscreenTable();
+
+                /* Subtract sync users if they're hidden */
+                if (hideSync) {
+                    adjustedTotal -= syncUserCounts.total;
+                    adjustedMfa -= syncUserCounts.mfaCapable;
+                    adjustedStrong -= syncUserCounts.strongAuth;
+                    adjustedPasswordless -= syncUserCounts.passwordless;
+                    adjustedMixed -= syncUserCounts.mixedAuth;
+                }
+
+                /* Calculate percentages */
+                const mfaPercentage = adjustedTotal > 0 ? Math.round((adjustedMfa / adjustedTotal) * 100 * 100) / 100 : 0;
+                const strongPercentage = adjustedTotal > 0 ? Math.round((adjustedStrong / adjustedTotal) * 100 * 100) / 100 : 0;
+                const passwordlessPercentage = adjustedTotal > 0 ? Math.round((adjustedPasswordless / adjustedTotal) * 100 * 100) / 100 : 0;
+                const mixedPercentage = adjustedTotal > 0 ? Math.round((adjustedMixed / adjustedTotal) * 100 * 100) / 100 : 0;
+
+                /* Update summary cards */
+                document.querySelector('#stat-card-total .stat-value').textContent = adjustedTotal;
+
+                document.querySelector('#stat-card-mfa-capable .stat-value').textContent = adjustedMfa;
+                document.querySelector('#stat-card-mfa-capable .stat-percentage').textContent = mfaPercentage + '% of users';
+
+                document.querySelector('#stat-card-strong-methods .stat-value').textContent = adjustedStrong;
+                document.querySelector('#stat-card-strong-methods .stat-percentage').textContent = strongPercentage + '% of users';
+
+                document.querySelector('#stat-card-passwordless-capable .stat-value').textContent = adjustedPasswordless;
+                document.querySelector('#stat-card-passwordless-capable .stat-percentage').textContent = passwordlessPercentage + '% of users';
+
+                document.querySelector('#stat-card-mixed-methods .stat-value').textContent = adjustedMixed;
+                document.querySelector('#stat-card-mixed-methods .stat-percentage').textContent = mixedPercentage + '% of users';
+
+                /* Update progress bar */
+                const progressBar = document.querySelector('.progress-bar');
+                const progressText = document.querySelector('.progress-text');
+                const passwordlessLegend = document.querySelector('#legend-item-passwordless-capable span');
+                const nonPasswordlessLegend = document.querySelector('#legend-item-not-passwordless-capable span');
+
+                progressBar.style.width = passwordlessPercentage + '%';
+                progressText.textContent = passwordlessPercentage + '% Complete';
+                passwordlessLegend.textContent = adjustedPasswordless + ' users passwordless capable';
+                nonPasswordlessLegend.textContent = (adjustedTotal - adjustedPasswordless) + ' users still need passwordless capability';
             }
         });
 
-        // Function to export table data to CSV
-        function exportTableToCSV() {
-            // Create a simple CSV string with proper formatting
-            let csvContent = [];
-            
-            // Get the table and header cells
-            const table = document.getElementById('authMethodsTable');
-            const headerRow = table.querySelector('thead tr');
-            const headerCells = headerRow.querySelectorAll('th');
-            
-            // Create header row for CSV
-            let headerCsvRow = [];
-            for (let i = 0; i < headerCells.length; i++) {
-                if (headerCells[i].style.display !== 'none') {
-                    let cellText = headerCells[i].textContent.trim();
-                    // Escape double quotes with double quotes for CSV format
-                    cellText = cellText.replace(/"/g, '""');
-                    headerCsvRow.push('"' + cellText + '"');
-                }
-            }
-            csvContent.push(headerCsvRow.join(','));
-            
-            // Get all visible rows and process them
-            const dataRows = table.querySelectorAll('tbody tr');
-            for (let i = 0; i < dataRows.length; i++) {
-                if (dataRows[i].style.display === 'none') continue;
-                
-                let csvRow = [];
-                const cells = dataRows[i].querySelectorAll('td');
-                
-                for (let j = 0; j < cells.length; j++) {
-                    if (cells[j].style.display === 'none') continue;
-                    
-                    let cellText = cells[j].textContent.trim();
-                    // Convert checkmarks and x-marks to Yes/No
-                    if (cellText === '✓') cellText = 'Yes';
-                    if (cellText === '✗') cellText = 'No';
-                    
-                    // Escape double quotes with double quotes for CSV format
-                    cellText = cellText.replace(/"/g, '""');
-                    csvRow.push('"' + cellText + '"');
-                }
-                
-                csvContent.push(csvRow.join(','));
-            }
-            
-            // Join all rows with proper newlines
-            const csvString = csvContent.join('\r\n');
-            
-            // Get date for filename
-            const today = new Date();
-            const date = today.toISOString().split('T')[0]; // YYYY-MM-DD format
-            
-            // Create download link with data URI
-            const downloadLink = document.createElement('a');
-            
-            // Add BOM for proper UTF-8 encoding in Excel
-            const BOM = '\uFEFF';
-            const encodedUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(BOM + csvString);
-            
-            downloadLink.setAttribute('href', encodedUri);
-            downloadLink.setAttribute('download', 'Entra_Auth_Methods_Report_' + date + '.csv');
-            document.body.appendChild(downloadLink);
-            
-            // Trigger download and remove link
-            downloadLink.click();
-            document.body.removeChild(downloadLink);
+        function sanitizeCsvString(value) {
+            return '"' + value.replace(/"/g, '""') + '"';
         }
-        
     </script>
 </body>
 </html>
@@ -1530,7 +1587,8 @@ Function Generate-EntraAuthReport {
     $OutputPath = Join-Path -Path $outpath -ChildPath "Entra_Authentication_Methods_Report.html"
 
     # Output HTML report
-    $html.ToString() | Out-File -FilePath $OutputPath -Encoding UTF8
+    $minifiedHtml = Minify-HTML -html $html.ToString()
+    $minifiedHtml | Out-File -FilePath $OutputPath -Encoding UTF8
     Write-output "HTML report generated at $OutputPath"
     
     # Open the report in the default browser
