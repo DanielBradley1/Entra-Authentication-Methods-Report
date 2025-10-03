@@ -1096,6 +1096,7 @@ Function Generate-EntraAuthReport {
             <button class="filter-button active" data-filter="all">All Users</button>
             <button class="filter-button" data-filter="privileged">Privileged Users</button>
             <button class="filter-button" data-filter="passwordless">Passwordless Capable</button>
+            <button class="filter-button" data-filter="non-passwordless">Non-Passwordless Capable</button>
             <button class="filter-button" data-filter="strong">Strong Methods</button>
             <button class="filter-button" data-filter="mixed">Strong+Weak Methods</button>
             <button class="filter-button" data-filter="weak">Weak Methods Only</button>
@@ -1498,6 +1499,9 @@ Function Generate-EntraAuthReport {
                             break;
                         case 'passwordless':
                             if (!r.isPasswordlessCapable) return false;
+                            break;
+                        case 'non-passwordless':
+                            if (r.isPasswordlessCapable) return false;
                             break;
                         case 'mixed':
                             if (!r.hasWeakMethods || !r.hasStrongMethods) return false;
