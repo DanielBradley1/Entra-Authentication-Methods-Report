@@ -116,9 +116,9 @@ if (-not $hasAllPerms) {
 
 #Check tenant level license plan
 $items = @("AAD_PREMIUM_P2", "AAD_PREMIUM", "AAD_BASIC")
-$Skus = Invoke-MgGraphRequest -Uri "Beta/subscribedSkus" -OutputType PSObject | Select -Expand Value
+$Skus = Invoke-MgGraphRequest -Uri "Beta/subscribedSkus" -OutputType PSObject | Select-Object -Expand Value
 foreach ($item in $items) {
-    $Search = $skus | ? { $_.ServicePlans.servicePlanName -contains "$item" }
+    $Search = $skus | Where-Object { $_.ServicePlans.servicePlanName -contains "$item" }
     if ($Search) {
         $licenseplan = $item
         break
@@ -130,11 +130,11 @@ foreach ($item in $items) {
 }
 
 #Get organisation name
-$organisationName = (Invoke-MgGraphRequest -Uri "v1.0/organization" -OutputType PSObject | Select -Expand value).DisplayName
+$organisationName = (Invoke-MgGraphRequest -Uri "v1.0/organization" -OutputType PSObject | Select-Object -Expand value).DisplayName
 
 #Return an array of authentication methods including whether they are enabled or not and for which users
 Function Get-AuthenticationMethods {
-    $policies = Invoke-MgGraphRequest -Uri "beta/policies/authenticationmethodspolicy" -OutputType PSObject | Select -Expand authenticationMethodConfigurations
+    $policies = Invoke-MgGraphRequest -Uri "beta/policies/authenticationmethodspolicy" -OutputType PSObject | Select-Object -Expand authenticationMethodConfigurations
     $policiesReport = [System.Collections.Generic.List[Object]]::new()
     forEach ($policy in $policies) {
         $obj = [PSCustomObject][ordered]@{
@@ -150,7 +150,7 @@ Function Get-AuthenticationMethods {
 
 Function Get-UserRegistrationDetails {
     #Lists all users and their user mfa registration details including their default method
-    $userRegistrations = Invoke-MgGraphRequest -Uri "Beta/reports/authenticationMethods/userRegistrationDetails?`$top=$limit&`$orderby=userPrincipalName" -OutputType PSObject | Select -Expand Value
+    $userRegistrations = Invoke-MgGraphRequest -Uri "Beta/reports/authenticationMethods/userRegistrationDetails?`$top=$limit&`$orderby=userPrincipalName" -OutputType PSObject | Select-Object -Expand Value
     
     if ($skipGuest) {
         $userRegistrations = $userRegistrations | Where-Object { $_.userType -ne "guest" }
@@ -165,7 +165,7 @@ Function Get-UserRegistrationDetails {
         $methodsToReplace += "Voice Call"  
         
         if (-not $skipDetailedPhoneInfo) {
-            $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.id)/authentication/methods" -OutputType PSObject | WHere { $_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod'}
+            $Methods = Invoke-MgGraphRequest -uri "/beta/users/$($user.id)/authentication/methods" -OutputType PSObject | Where-Object { $_."@odata.type" -eq '#microsoft.graph.phoneAuthenticationMethod'}
             if ($Methods.smsSignInState -eq "ready") { 
                 $methodsToReplace += "SMS" 
             }
@@ -185,18 +185,18 @@ Function Get-PrivilegedUserRegistrationDetails {
     )
     If ($licenseplan -eq "AAD_PREMIUM_P2") {
         #Get all members (eligible and assigned) of PIM roles
-        $EligiblePIMRoles = Invoke-MgGraphRequest -Uri "beta/roleManagement/directory/roleEligibilitySchedules?`$expand=*" -OutputType PSObject | Select -Expand Value
-        $AssignedPIMRoles = Invoke-MgGraphRequest -Uri "beta/roleManagement/directory/roleAssignmentSchedules?`$expand=*" -OutputType PSObject | Select -Expand Value
+        $EligiblePIMRoles = Invoke-MgGraphRequest -Uri "beta/roleManagement/directory/roleEligibilitySchedules?`$expand=*" -OutputType PSObject | Select-Object -Expand Value
+        $AssignedPIMRoles = Invoke-MgGraphRequest -Uri "beta/roleManagement/directory/roleAssignmentSchedules?`$expand=*" -OutputType PSObject | Select-Object -Expand Value
         $DirectoryRoles = $EligiblePIMRoles + $AssignedPIMRoles
-        $DirectoryRoleUsers = $DirectoryRoles | Where { $_.Principal.'@odata.type' -eq "#microsoft.graph.user" }
+        $DirectoryRoleUsers = $DirectoryRoles | Where-Object { $_.Principal.'@odata.type' -eq "#microsoft.graph.user" }
         $RoleMembers = $DirectoryRoleUsers.Principal.userPrincipalName | Select-Object -Unique
     }
     else {
         #Get all members or directory roles
-        $DirectoryRoles = Invoke-MgGraphRequest -Uri "/beta/directoryRoles?" -OutputType PSObject | Select -Expand Value
-        $RoleMembers = $DirectoryRoles | ForEach-Object { Invoke-MgGraphRequest -uri "/beta/directoryRoles/$($_.id)/members" -OutputType PSObject | Select -Expand Value } | where { $_.'@odata.type' -eq "#microsoft.graph.user" } | Select-Object -expand userPrincipalName -Unique
+        $DirectoryRoles = Invoke-MgGraphRequest -Uri "/beta/directoryRoles?" -OutputType PSObject | Select-Object -Expand Value
+        $RoleMembers = $DirectoryRoles | ForEach-Object { Invoke-MgGraphRequest -uri "/beta/directoryRoles/$($_.id)/members" -OutputType PSObject | Select-Object -Expand Value } | Where-Object { $_.'@odata.type' -eq "#microsoft.graph.user" } | Select-Object -expand userPrincipalName -Unique
     }
-    $PrivilegedUserRegistrationDetails = $userRegistrationsReport | where { $RoleMembers -contains $_.userPrincipalName }
+    $PrivilegedUserRegistrationDetails = $userRegistrationsReport | Where-Object { $RoleMembers -contains $_.userPrincipalName }
     Return $PrivilegedUserRegistrationDetails
 }
 
@@ -230,13 +230,13 @@ $userRegistrationsReport = Get-UserRegistrationDetails
 Write-output "Fetching authentication methods..."
 $authenticationMethods = Get-AuthenticationMethods
 #Get disabled and enabled authentication methods
-$disabledAuthenticationMethods = $authenticationMethods | where { $_.State -eq "Disabled" }
-$enabledAuthenticationMethods = $authenticationMethods | where { $_.State -eq "Enabled" }
+$disabledAuthenticationMethods = $authenticationMethods | Where-Object { $_.State -eq "Disabled" }
+$enabledAuthenticationMethods = $authenticationMethods | Where-Object { $_.State -eq "Enabled" }
 #Get methods enabled and disabled by policy
-$MethodsDisabledByPolicy = $AllMethods | Where { $_.AltName -in $disabledAuthenticationMethods.DisplayName }
-$MethodsEnabledByPolicy = $AllMethods | Where { $_.AltName -in $enabledAuthenticationMethods.DisplayName }
+$MethodsDisabledByPolicy = $AllMethods | Where-Object { $_.AltName -in $disabledAuthenticationMethods.DisplayName }
+$MethodsEnabledByPolicy = $AllMethods | Where-Object { $_.AltName -in $enabledAuthenticationMethods.DisplayName }
 #get weak authentication methods and count
-$enabledWeakAuthenticationMethods = $MethodsEnabledByPolicy | where { $_.Strength -eq "Weak" }
+$enabledWeakAuthenticationMethods = $MethodsEnabledByPolicy | Where-Object { $_.Strength -eq "Weak" }
 
 ###Calculate totals
 #Total number of users
@@ -244,7 +244,7 @@ $totalUsersCount = $userRegistrationsReport.Count
 
 ### Calculate MFA capable info
 Write-output "Analyzing MFA info..."
-$totalMFACapableUsers = $userRegistrationsReport | where { $_.isMfaCapable -eq $true }
+$totalMFACapableUsers = $userRegistrationsReport | Where-Object { $_.isMfaCapable -eq $true }
 $totalMFACapableUsersCount = $totalMFACapableUsers.Count
 #Calculate percentage of MFA capable users
 $MfaCapablePercentage = 0
@@ -254,7 +254,7 @@ if ($totalUsersCount -gt 0) {
 
 ###Calculate passwordless info
 Write-output "Analyzing passwordless info..."
-$totalPasswordlessUsers = $userRegistrationsReport | where { $_.isPasswordlessCapable -eq $true }
+$totalPasswordlessUsers = $userRegistrationsReport | Where-Object { $_.isPasswordlessCapable -eq $true }
 $totalPasswordlessUsersCount = $totalPasswordlessUsers.Count
 #Calculate percentage of passwordless capable users
 $passwordlessCapablePercentage = 0
@@ -317,7 +317,7 @@ if ($totalUsersCount -gt 0) {
 ### Calculate privileged users not using phish resistant methods
 Write-output "Analyzing privileged users not using phish resistant methods..."
 $PrivilegedUsersRegistrationDetails = Get-PrivilegedUserRegistrationDetails -userRegistrations $userRegistrationsReport
-$PrivilegedUsersNotUsingPhishResistantMethods = $PrivilegedUsersRegistrationDetails | where { $_.methodsRegistered -notcontains "fido2SecurityKey" -and $_.methodsRegistered -notcontains "passKeyDeviceBound" -and $_.methodsRegistered -notcontains "passKeyDeviceBoundAuthenticator" }
+$PrivilegedUsersNotUsingPhishResistantMethods = $PrivilegedUsersRegistrationDetails | Where-Object { $_.methodsRegistered -notcontains "fido2SecurityKey" -and $_.methodsRegistered -notcontains "passKeyDeviceBound" -and $_.methodsRegistered -notcontains "passKeyDeviceBoundAuthenticator" }
 # Count of privileged users not using phish resistant methods
 $PrivilegedUsersNotUsingPhishResistantMethodsCount = $PrivilegedUsersNotUsingPhishResistantMethods.Count
 
