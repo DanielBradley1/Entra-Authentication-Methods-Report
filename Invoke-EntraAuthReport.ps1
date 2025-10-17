@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 0.5.0
+.VERSION 0.6.0
 
 .GUID bbda77a3-7d1c-415e-9c28-7c934971599c
 
@@ -30,6 +30,7 @@
     v0.3 - Added export functionality, examples and increased registration details report size to 20,000.
     v0.4 - Added limit, skipGuest, skipDetailedPhoneInfo and openBrowser parameters.
     v0.5 - Improved overall performance and UX with high number of users.
+    v0.6 - Non passwordless filtering added & minor improvements by slueders-bag. Fixed issues with correct auth methods showing in the table.
 #>
 
 <#
@@ -1311,7 +1312,7 @@ Function Generate-EntraAuthReport {
                     trCols.push($($backtick)<td>`${rowData.isPasswordlessCapable ? "<span class='checkmark'>✓</span>" : "<span class='x-mark'>✗</span>" }</td>$($backtick));
 
                     authMethods.forEach(m => {
-                        trCols.push($($backtick)<td>`${ rowData.methodsRegistered.includes(m) ? "<span class='checkmark'>✓</span>" : "<span class='x-mark'>✗</span>" }</td>$($backtick));
+                        trCols.push($($backtick)<td>`${ rowData.methodsRegistered.includes(m.type) ? "<span class='checkmark'>✓</span>" : "<span class='x-mark'>✗</span>" }</td>$($backtick));
                     });
 
                     tr.innerHTML = trCols.filter((c, i) => !hiddenColumnIndices.includes(i)).join('');
@@ -1358,7 +1359,7 @@ Function Generate-EntraAuthReport {
                     csvRow.push(rowData.isMfaCapable ? 'Yes' : 'No');
                     csvRow.push(rowData.isPasswordlessCapable ? 'Yes' : 'No');
                     authMethods.forEach(m => {
-                        csvRow.push(rowData.methodsRegistered.includes(m) ? 'Yes' : 'No');
+                        csvRow.push(rowData.methodsRegistered.includes(m.type) ? 'Yes' : 'No');
                     });
 
                     /* fill the extra columns */ 
